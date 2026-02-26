@@ -1,5 +1,5 @@
 {
-    "name": "GNNS GPU Environment",
+    "name": "GNNS GPU Environment Niklas",
     "build": {
         "dockerfile": "Dockerfile",
         "context": "."
@@ -8,6 +8,7 @@
         "--name", "team-pytorch-${localEnv:USER}",
         "--gpus", "all"
     ],
+    "forwardPorts": [8888],
     "workspaceMount": "source=${localWorkspaceFolder},target=/workspace,type=bind",
     "workspaceFolder": "/workspace",
     "remoteUser": "developer",

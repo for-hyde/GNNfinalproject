@@ -1,0 +1,37 @@
+{
+    "name": "GNNS GPU Environment Aidana",
+    "build": {
+        "dockerfile": "Dockerfile",
+        "context": "."
+    },
+    "runArgs": [
+        "--name", "team-pytorch-${localEnv:USER}",
+        "--gpus", "all"
+    ],
+    "forwardPorts": [8888],
+    "workspaceMount": "source=${localWorkspaceFolder},target=/workspace,type=bind",
+    "workspaceFolder": "/workspace",
+    "remoteUser": "developer",
+    "customizations": {
+        "vscode": {
+            "extensions": [
+                "ms-python.python",
+                "ms-python.vscode-pylance",
+                "ms-toolsai.jupyter",
+                "ms-python.black-formatter"
+            ],
+            "settings": {
+                "python.defaultInterpreterPath": "/opt/conda/bin/python",
+                "jupyter.jupyterServerType": "local",
+                "python.venvFolders": [],
+                "python.condaPath": "/opt/conda/bin/conda",
+                "python.terminal.activateEnvironment": true,
+                "jupyter.launchTimeout": 60000
+            }
+        }
+    },
+    "containerEnv": {
+        "NVIDIA_VISIBLE_DEVICES": "all",
+        "NVIDIA_DRIVER_CAPABILITIES": "compute,utility"
+    }
+}
