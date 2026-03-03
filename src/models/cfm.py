@@ -1,72 +1,207 @@
-from torchcfm.models import MLP
-from torchcfm.utils import plot_trajectories, torch_wrapper
-
 import torch
 from torch import nn
 import numpy as np
+from torch.utils.data import DataLoader
 
+from torchcfm.models import MLP
+from torchcfm.conditional_flow_matching import ExactOptimalTransportConditionalFlowMatcher
+from torchdiffeq import odeint
 
-# From the single cell example
-def get_batch(FM, X, batch_size, n_times, device, return_noise=False):
-    """
-    Construct a batch with points from each timepoint pair
-    """
-    ts = []
-    xts = []
-    uts = []
-    noises = []
-    for t_start in range(n_times - 1):
-        x0 = (
-            torch.from_numpy(X[t_start][np.random.randint(X[t_start].shape[0], size=batch_size)])
-            .float()
-            .to(device)
-        )
-        x1 = (
-            torch.from_numpy(
-                X[t_start + 1][np.random.randint(X[t_start + 1].shape[0], size=batch_size)]
-            )
-            .float()
-            .to(device)
-        )
-        if return_noise:
-            t, xt, ut, eps = FM.sample_location_and_conditional_flow(
-                x0, x1, return_noise=return_noise
-            )
-            noises.append(eps)
-        else:
-            t, xt, ut = FM.sample_location_and_conditional_flow(x0, x1, return_noise=return_noise)
-        ts.append(t + t_start)
-        xts.append(xt)
-        uts.append(ut)
-    
-    t = torch.cat(ts)
-    xt = torch.cat(xts)
-    ut = torch.cat(uts)
-    
-    if return_noise:
-        noises = torch.cat(noises)
-        return t, xt, ut, noises
-    
-    return t, xt, ut
+from utils.logging_utils import (start_log, log, log_section)
+import copy
+from datetime import datetime
+from tqdm import tqdm 
+import sys
+
 
 
 class ModalityConverter(nn.Module):
     def __init__(
-            self, 
+            self,
             latent_dim: int,
-            encoder_path: str, 
-            decoder_path: str,
-            ):
-        
-        self.ot_cfm_model = MLP(dim=latent_dim)
-        # Get the encoder and decoder from the corresponding trained models
-        self.encoder = torch.load(encoder_path, weights_only=False).encoder()
-        self.decoder = torch.load(decoder_path, weights_only=False).decoder()
+            rna_vae_path: str,
+            atac_vae_path: str,
+            sigma: float = 0.1,
+        ):
+        super().__init__()  # ← was missing entirely
 
-        return
+        self.sigma = sigma
+        self.latent_dim = latent_dim
+
+        # CFM vector field model
+        self.cfm_model = MLP(dim=latent_dim, time_varying=True, w=64)
+        self.fm = ExactOptimalTransportConditionalFlowMatcher(sigma=self.sigma)
+
+        self.encoder_rna  = torch.load(rna_vae_path,  weights_only=False).encoder
+        self.decoder_rna  = torch.load(rna_vae_path,  weights_only=False).decoder
+
+        self.encoder_atac = torch.load(atac_vae_path, weights_only=False).encoder
+        self.decoder_atac = torch.load(atac_vae_path, weights_only=False).decoder
+
+        for module in [self.encoder_rna, self.decoder_rna, self.encoder_atac, self.decoder_atac]:
+            self._freeze_module(module)
+
+
+    @staticmethod
+    def _freeze_module(module: nn.Module):
+        module.eval()
+        for param in module.parameters():
+            param.requires_grad = False
+
+    def forward(self, x_rna, x_atac):
+        with torch.no_grad():
+            z_rna  = self.encoder_rna(x_rna)
+            z_atac = self.encoder_atac(x_atac)
+
+        t, zt, ut = self.fm.sample_location_and_conditional_flow(z_rna, z_atac)
+        vt = self.cfm_model(torch.cat([zt, t[:, None]], dim=-1))
+
+        return vt, ut
+
+
+    def convert(self, x_rna):
+        z_rna = self.encoder_rna(x_rna)
+
+        t_span = torch.linspace(0, 1, 100, device=x_rna.device)
+        z_atac_hat = odeint(self.vector_field, z_rna, t_span)[-1]
+
+        return self.decoder_atac(z_atac_hat)
+
+
+    def training_step(self, x_source: torch.Tensor, x_target: torch.Tensor) -> torch.Tensor:
+        vt, ut = self.forward(x_source, x_target)
+        return torch.mean((vt - ut) ** 2)
     
-    def forward(self, x):
-        return
+    def vector_field(self, t, z):
+        t_batch = t.expand(z.shape[0], 1)
+        return self.cfm_model(torch.cat([z, t_batch], dim=-1))
 
 
+    def train_one_epoch(self, train_loader, optimizer: torch.optim.Optimizer) -> float:
+        self.cfm_model.train()
 
+        for module in [self.encoder_rna, self.decoder_rna, self.encoder_atac, self.decoder_atac]:
+            self._freeze_module(module)
+
+        total_loss = 0.0
+        for x_source, x_target in train_loader: 
+            x_source = x_source.to(next(self.parameters()).device)
+            x_target = x_target.to(next(self.parameters()).device)
+
+            optimizer.zero_grad()
+            loss = self.training_step(x_source, x_target)
+            loss.backward()
+            optimizer.step()
+            total_loss += loss.item()
+
+        return total_loss
+
+
+    @torch.no_grad()
+    def validate(self, valid_loader) -> float:
+
+        self.eval()
+        total_loss = 0.0
+
+        for x_source, x_target in valid_loader:
+
+            x_source = x_source.to(next(self.parameters()).device)
+            x_target = x_target.to(next(self.parameters()).device)
+            loss = self.training_step(x_source, x_target)
+            total_loss += loss.item()
+
+        return total_loss
+    
+
+    @torch.no_grad()
+    def predict(
+        self,
+        x_rna: torch.Tensor,
+        n_steps: int = 100,
+        return_trajectory: bool = False,
+        ) -> torch.Tensor:
+        
+        """
+        Convert RNA to ATAC seq data at point of inference.
+
+        Args:
+        x_rna: RNA input  [samples, features]
+        n_steps: number of ODE integration steps (more = more accurate, slower)
+        return_trajectory: if True, returns all intermediate latents [n_steps, B, latent_dim]
+
+        Returns:
+        x_atac_hat:  predicted ATAC output  [B, D_atac]
+        """
+
+        self.eval()
+
+        device = next(self.parameters()).device
+        x_rna = x_rna.to(device)
+
+        z_rna = self.encoder_rna(x_rna)
+
+        t_span = torch.linspace(0, 1, n_steps, device=device)
+        trajectory = odeint(self.vector_field, z_rna, t_span)  # [n_steps, samples, latent_dim]
+
+        z_atac_hat = trajectory[-1]  # Take only the last step to get a final [samples, latent_dim]
+        x_atac_hat = self.decoder_atac(z_atac_hat)  # decode this with atac decoder!
+
+        if return_trajectory:
+            return x_atac_hat, trajectory
+
+        return x_atac_hat
+    
+
+def train_modality_converter(
+    model_params: dict, 
+    train_loader: DataLoader, 
+    valid_loader: DataLoader, 
+    epochs: int, 
+    ):
+    
+    start_log("/workspace/logs", "infoVAE_training_run")
+    log_section("LOADING MODEL")
+
+    modality_converter = ModalityConverter(
+        latent_dim=model_params["latent_dim"],
+        rna_vae_path=model_params["rna_vae_path"],
+        atac_vae_path=model_params["atac_vae_path"],
+        )
+
+    log(str(modality_converter.parameters))
+
+    ot_cfm_optimizer = torch.optim.Adam(modality_converter.parameters(), 1e-4)
+
+    training_losses = []
+    validation_losses = []
+    min_loss = np.inf
+    trained_model = copy.deepcopy(modality_converter)
+    
+    log_section("TRAINING START")
+    for epoch in tqdm(
+        range(0, epochs),
+        initial=0,
+        ncols=100,
+        desc="\nEpochs",
+        file=sys.stdout
+        ):
+    
+        # First validate, then train, so that both use the same model state!
+        validation_loss = modality_converter.validate(valid_loader)
+        validation_losses.append(validation_loss)
+
+        training_loss = modality_converter.train_one_epoch(train_loader, ot_cfm_optimizer)
+        training_losses.append(training_loss)
+
+        if validation_loss < min_loss:
+            trained_model = copy.deepcopy(modality_converter)
+
+        if (epoch+1)%100 == 0:
+            log(f"Epoch [{epoch+1}/{epochs}]: Training Loss: {training_loss}, Validation Loss: {validation_loss}")
+        
+    log_section("FINISHED TRAINING, SAVING MODEL")
+    save_path = f"/workspace/models/{datetime.now()}_converter_model_weights.pth"
+    torch.save(trained_model.state_dict(), save_path)
+    log(f"Model saved to {save_path}")
+
+    return trained_model, training_losses, validation_losses
