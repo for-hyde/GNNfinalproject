@@ -2,7 +2,7 @@ import torch
 import numpy as np
 import sys
 from torch import nn
-from torch.cuda.amp.grad_scaler import GradScaler
+from torch.amp.grad_scaler import GradScaler
 import torch.nn.functional as F
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch.utils.data import DataLoader
@@ -40,13 +40,15 @@ def init_decoder(layers, input_dim, latent_dim, dropout_prob=None):
 
     layer_dims = get_hidden_dim_steps(input_dim, latent_dim, layers+1)
 
-    for i in range(layers):
+    for i in range(layers-1):
 
         decoder_layers.append(nn.Linear(int(layer_dims[i]), int(layer_dims[i+1])))
         decoder_layers.append(nn.ReLU(inplace=True))
         if dropout_prob:
             decoder_layers.append(nn.Dropout(dropout_prob))
     
+    decoder_layers.append(nn.Linear(int(layer_dims[-2]), int(layer_dims[-1])))
+
     decoder = nn.Sequential(*decoder_layers)
 
     return decoder 
@@ -60,8 +62,9 @@ class InfoVAE(nn.Module):
             layers: int,
             lr: float,
             wd: float,
+            mode: str,  # either "rna" or "atac"
             device,
-            lambda_mmd: float = 100.0,
+            lambda_mmd: float = 1.0,
             ):
         
         super(InfoVAE, self).__init__()
@@ -70,12 +73,17 @@ class InfoVAE(nn.Module):
         self.latent_size = int(latent_size)
         self.layers = int(layers)
         self.lambda_mmd = lambda_mmd
+        self.mode = mode
 
         self.encoder = init_encoder(self.layers, self.input_size, self.latent_size)
         self.decoder = init_decoder(self.layers, self.input_size, self.latent_size)
 
         self.fc_mu = nn.Linear(self.latent_size, self.latent_size)
         self.fc_logvar = nn.Linear(self.latent_size, self.latent_size)
+
+        self.apply(self.weights_init)
+        self.device = device
+        self.to(self.device)
 
         self.optimizer = torch.optim.Adam(
             self.parameters(),
@@ -90,18 +98,15 @@ class InfoVAE(nn.Module):
             patience=10,
         )
 
-        self.apply(self.weights_init)
-        self.device = device
-        self.to(self.device)
-    
-
+        
     def weights_init(self, param):
         if isinstance(param, nn.Linear):
-            nn.init.xavier_uniform_(param.weight)
+            nn.init.kaiming_uniform_(param.weight, nonlinearity="relu")
             nn.init.constant_(param.bias, 0)
 
 
     def reparametrize(self, mu: torch.Tensor, logvar: torch.Tensor):
+        logvar = logvar.clamp(-30, 20)
         std = torch.exp(0.5 * logvar)
         eps = torch.randn_like(std)
         return mu + eps * std
@@ -124,54 +129,50 @@ class InfoVAE(nn.Module):
         x_recon = self.decode(z)
         return x_recon, z, mu, logvar
 
-
     def compute_mmd(self, z: torch.Tensor):
-        prior_z = torch.randn_like(z)
-        
-        def rbf_kernel(x1, x2):
 
-            z_dim = x1.size(1)
-            sigma = 2.0 * z_dim
-            diff = x1.unsqueeze(1) - x2.unsqueeze(0)
-            dist = torch.pow(diff, 2).sum(2)
-           
+        z = z.to(torch.float32) 
+        prior_z = torch.randn_like(z)
+
+        def rbf_kernel(x1, x2):
+            sigma = 2.0 * x1.size(1)
+            # torch.cdist is highly optimized and numerically stable
+            dist = torch.cdist(x1, x2, p=2.0).pow(2)
             return torch.exp(-dist / sigma)
 
         z_kernel = rbf_kernel(z, z)
         prior_kernel = rbf_kernel(prior_z, prior_z)
         cross_kernel = rbf_kernel(z, prior_z)
 
-        mmd = z_kernel.mean() + prior_kernel.mean() - 2 * cross_kernel.mean()
-        return mmd
+        return z_kernel.mean() + prior_kernel.mean() - 2 * cross_kernel.mean()
 
-
-    def loss_function(self, x: torch.Tensor, x_recon: torch.Tensor, z: torch.Tensor, mu: torch.Tensor, logvar:torch.Tensor):
+    def loss_function(self, x: torch.Tensor, x_recon: torch.Tensor, z: torch.Tensor, mu: torch.Tensor, logvar: torch.Tensor):
         
-        recon_loss = F.mse_loss(x_recon, x, reduction='sum')
-        kl_loss = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
+        recon_loss = F.mse_loss(x_recon, x, reduction='mean')
         mmd_loss = self.compute_mmd(z)
         
-        # InfoVAE objective: Recon + KL + lambda*MMD
-        return recon_loss + kl_loss + (self.lambda_mmd * mmd_loss)
+        return recon_loss + (self.lambda_mmd * mmd_loss)
 
 
     def train_one_epoch(self, train_loader):
         self.train()
         total_loss = 0
 
-        for batch_idx, (batch_data,) in enumerate(train_loader):
-            self.optimizer.zero_grad()
-            batch_data = batch_data.to(self.device)
+        for batch_idx, batch_data in enumerate(train_loader):
+            self.optimizer.zero_grad(set_to_none=True)
             
-            x_recon, z, mu, logvar = self.forward(batch_data)
-            loss = self.loss_function(batch_data, x_recon, z, mu, logvar)
-            
+            with torch.autocast(device_type=self.device.type, dtype=torch.bfloat16):
+                batch_data = batch_data.to(self.device, non_blocking=True)
+                
+                x_recon, z, mu, logvar = self.forward(batch_data)
+                loss = self.loss_function(batch_data, x_recon, z, mu, logvar)
+
             loss.backward()
+            torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=1.0)
             self.optimizer.step()
             total_loss += loss.item()
-
-        if self.scheduler:
-            self.scheduler.step(total_loss)
+        
+        total_loss /= len(train_loader)
         
         return total_loss
 
@@ -182,14 +183,17 @@ class InfoVAE(nn.Module):
         with torch.no_grad():
             total_loss = 0
 
-            for batch_idx, (batch_data,) in enumerate(valid_loader):
-                self.optimizer.zero_grad()
-                batch_data = batch_data.to(self.device)
+            for batch_idx, batch_data in enumerate(valid_loader):
                 
-                x_recon, z, mu, logvar = self.forward(batch_data)
-                loss = self.loss_function(batch_data, x_recon, z, mu, logvar)
+                with torch.autocast(device_type=self.device.type, dtype=torch.bfloat16):
+                    batch_data = batch_data.to(self.device, non_blocking=True)
+                    
+                    x_recon, z, mu, logvar = self.forward(batch_data)
+                    loss = self.loss_function(batch_data, x_recon, z, mu, logvar)
                 
                 total_loss += loss.item()
+        
+        total_loss /= len(valid_loader)
         
         return total_loss
 
@@ -199,7 +203,8 @@ def train_infoVAE(
         model_params: dict, 
         train_loader: DataLoader, 
         valid_loader: DataLoader, 
-        epochs: int, 
+        epochs: int,
+        patience: int = 50
         ):
     
     start_log("/workspace/logs", "infoVAE_training_run")
@@ -212,35 +217,46 @@ def train_infoVAE(
         lr=model_params["lr"],
         wd=model_params["wd"],
         device=model_params["device"],
+        mode=model_params["mode"],
     )
+    model = torch.compile(model)
     log(str(model.parameters))
 
     training_losses = []
     validation_losses = []
     min_loss = np.inf
     trained_model = copy.deepcopy(model)
+    patience_counter = 0
     
     log_section("TRAINING START")
-    for epoch in tqdm(
-        range(0, epochs),
-        initial=0,
-        ncols=100,
-        desc="\nEpochs",
-        file=sys.stdout
-        ):
-    
-        # First validate, then train, so that both use the same model state!
-        validation_loss = model.validate(valid_loader)
-        validation_losses.append(validation_loss)
-
+    log_section("TRAINING START")
+    for epoch in tqdm(range(0, epochs), initial=0, ncols=100, desc="\nEpochs", file=sys.stdout):
+        
+        # 1. Train first
         training_loss = model.train_one_epoch(train_loader)
-        training_losses.append(training_loss)
+        training_loss_avg = training_loss / len(train_loader)
+        training_losses.append(training_loss_avg)
 
-        if validation_loss < min_loss:
+        # 2. Then validate
+        validation_loss = model.validate(valid_loader)
+        validation_loss_avg = validation_loss / len(valid_loader)
+        validation_losses.append(validation_loss_avg)
+        
+        # 3. Step scheduler based on the actual trained epoch
+        model.scheduler.step(validation_loss_avg)
+
+        if validation_loss_avg < min_loss:
+            min_loss = validation_loss_avg
             trained_model = copy.deepcopy(model)
+            patience_counter = 0
+        else:
+            patience_counter += 1
 
-        if (epoch+1)%100 == 0:
-            log(f"Epoch [{epoch+1}/{epochs}]: Training Loss: {training_loss}, Validation Loss: {validation_loss}")
+        log(f"Epoch [{epoch+1}/{epochs}]: Train: {training_loss_avg:.4f}, Val: {validation_loss_avg:.4f}")
+        
+        if patience_counter >= patience:
+            log(f"Early stopping triggered at epoch {epoch+1}!")
+            break
         
     log_section("FINISHED TRAINING, SAVING MODEL")
     save_path = f"/workspace/models/{datetime.now()}_vae_model_weights.pth"
