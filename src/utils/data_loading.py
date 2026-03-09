@@ -64,7 +64,104 @@ def split_dataset(dataset, val_ratio=0.2, seed=19193):
 
     return  train_indices, val_indices
 
+def uniform_split_dataset(dataset, test_ratio, val_ratio=0.2, seed=19193):
+    '''Set test_ratio to None if you don't wish to have a testing dataset, otherwise set it to any float like 0.1 and enjoy a fresh testing'''
+    
+    if seed is not None:
+        setup_seed(seed)
+    
+    if test_ratio == None: 
+        
+        train_indices = []
+        val_indices = []
+        test_indices = []
 
+        for ct in dataset.obs['cell_type'].unique():
+            
+            ct_idx = np.where(dataset.obs['cell_type'] == ct)[0]
+            np.random.shuffle(ct_idx)
+
+            n_val = int(len(ct_idx) * val_ratio)
+
+            val_indices.extend(ct_idx[:n_val])
+            train_indices.extend(ct_idx[n_val:])
+
+        train_indices = np.array(train_indices)
+        val_indices = np.array(val_indices)
+
+        return  train_indices, val_indices, test_indices
+
+    if test_ratio != None: 
+        
+        train_indices = []
+        val_indices = []
+        test_indices = []
+
+        for ct in dataset.obs['cell_type'].unique():
+            
+            ct_idx = np.where(dataset.obs['cell_type'] == ct)[0]
+            np.random.shuffle(ct_idx)
+
+            n_val = int(len(ct_idx) * val_ratio)
+            n_test = int(len(ct_idx) * test_ratio)
+
+            val_indices.extend(ct_idx[:n_val])
+            test_indices.extend(ct_idx[n_val:n_val+n_test])
+            train_indices.extend(ct_idx[n_val+n_test:])
+
+        train_indices = np.array(train_indices)
+        val_indices = np.array(val_indices)
+        test_indices = np.array(test_indices)
+
+        return  train_indices, val_indices, test_indices
+    
+def cell_type_split_dataset(dataset, annot, cell_col, cluster_col, test_ratio, val_ratio=0.2, seed=19193):
+    ''' This function lets you choose if you want to split the datasets by cell type (annot==True) or by whatever clusters is available (annot==False). 
+    cell_col should be a string - how the cell types column is names in your data. Sadly, you'll have to check that manually. 
+    For BMMC it's just 'cell_type' tho.  
+    cluster_col is the same. For BMMC it's 'leiden' '''
+    
+    import math 
+    
+    if not seed is None:
+        setup_seed(seed)
+    
+    if annot == True: #run on the cell type annotations 
+        cells = list(dataset.obs_names)
+        cell_types = dataset.obs[cell_col].unique().to_list()
+        random.shuffle(cell_types)
+        type_to_id = {ct: i for i, ct in enumerate(cell_types)}
+        id_to_type = {i: ct for ct, i in type_to_id.items()}
+        cell_types_num = np.array([type_to_id[ct] for ct in cell_types])
+        
+        val_count = math.floor(len(cell_types) * val_ratio)
+        test_count = math.floor(len(cell_types) * test_ratio) 
+        train_count = len(cell_types) - val_count - test_count 
+        
+        test_cells = list(cell_types_num[: test_count])
+        val_cells = cell_types_num[test_count: test_count + val_count]
+        train_cells = cell_types_num[test_count + val_count:]
+
+        test_types = {id_to_type[i] for i in test_cells}
+        mask = rna.obs[cell_col].isin(test_types)
+        test_indices = rna[mask]
+        
+        val_types = {id_to_type[i] for i in val_cells}
+        mask = rna.obs[cell_col].isin(val_types)
+        val_indices = rna[mask]
+        
+        mask = ~rna.obs[cell_col].isin(test_types | val_types) 
+        train_indices = rna[mask]
+    
+        return train_indices.obs.index, val_indices.obs.index, test_indices.obs.index
+        
+    # if annot == False: #divide by Leiden clusters - throw an error if there are no clusters & run some 
+    #     cells = list(dataset.obs_names)
+    #     clusters = dataset.obs[cluster_col].unique().to_list()
+        
+    #     return train_indices, val_indices, test_indices
+        
+    
 class MultiomeDatasetVAE(Dataset):
     def __init__(self, rna, atac, indices):
         self.atac = atac 

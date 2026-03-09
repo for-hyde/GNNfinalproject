@@ -14,44 +14,75 @@ from datetime import datetime
 from utils.logging_utils import (start_log, log, log_section)
 
 
-def get_hidden_dim_steps(input, output, steps):
-    return list(np.linspace(output, input, num=steps))
+# def get_hidden_dim_steps(input, output, steps):
+#     return list(np.linspace(output, input, num=steps))
 
 
-def init_encoder(layers, input_dim, latent_dim, dropout_prob=None):
-    encoder_layers = []
+# def init_encoder(layers, input_dim, latent_dim, dropout_prob=None):
+#     encoder_layers = []
 
-    layer_dims = get_hidden_dim_steps(input_dim, latent_dim, layers+1)
+#     layer_dims = get_hidden_dim_steps(input_dim, latent_dim, layers+1)
 
-    for i in range(1, layers+1):
+#     for i in range(1, layers+1):
 
-        encoder_layers.append(nn.Linear(int(layer_dims[-i]), int(layer_dims[-i-1])))
-        encoder_layers.append(nn.ReLU(inplace=True))
-        if dropout_prob:
-            encoder_layers.append(nn.Dropout(dropout_prob))
+#         encoder_layers.append(nn.Linear(int(layer_dims[-i]), int(layer_dims[-i-1])))
+#         encoder_layers.append(nn.ReLU(inplace=True))
+#         if dropout_prob:
+#             encoder_layers.append(nn.Dropout(dropout_prob))
     
-    encoder = nn.Sequential(*encoder_layers)
+#     encoder = nn.Sequential(*encoder_layers)
 
-    return encoder 
+#     return encoder 
 
 
-def init_decoder(layers, input_dim, latent_dim, dropout_prob=None):
-    decoder_layers = []
+# def init_decoder(layers, input_dim, latent_dim, dropout_prob=None):
+#     decoder_layers = []
 
-    layer_dims = get_hidden_dim_steps(input_dim, latent_dim, layers+1)
+#     layer_dims = get_hidden_dim_steps(input_dim, latent_dim, layers+1)
 
-    for i in range(layers-1):
+#     for i in range(layers-1):
 
-        decoder_layers.append(nn.Linear(int(layer_dims[i]), int(layer_dims[i+1])))
-        decoder_layers.append(nn.ReLU(inplace=True))
-        if dropout_prob:
-            decoder_layers.append(nn.Dropout(dropout_prob))
+#         decoder_layers.append(nn.Linear(int(layer_dims[i]), int(layer_dims[i+1])))
+#         decoder_layers.append(nn.ReLU(inplace=True))
+#         if dropout_prob:
+#             decoder_layers.append(nn.Dropout(dropout_prob))
     
-    decoder_layers.append(nn.Linear(int(layer_dims[-2]), int(layer_dims[-1])))
+#     decoder_layers.append(nn.Linear(int(layer_dims[-2]), int(layer_dims[-1])))
 
-    decoder = nn.Sequential(*decoder_layers)
+#     decoder = nn.Sequential(*decoder_layers)
 
-    return decoder 
+#     return decoder 
+
+
+def init_encoder(input_dim, latent_dim, hidden_dims=[1024, 512, 256]):
+    layers = []
+    curr_dim = input_dim
+    
+    for h_dim in hidden_dims:
+        layers.append(nn.Linear(curr_dim, h_dim))
+        layers.append(nn.BatchNorm1d(h_dim))
+        layers.append(nn.ReLU())
+        curr_dim = h_dim
+        
+    encoder = nn.Sequential(*layers)
+
+    return encoder, curr_dim 
+
+
+def init_decoder(latent_dim, input_dim, hidden_dims=[256, 512, 1024]):
+    layers = []
+    curr_dim = latent_dim
+    
+    for h_dim in hidden_dims:
+        layers.append(nn.Linear(curr_dim, h_dim))
+        layers.append(nn.BatchNorm1d(h_dim))
+        layers.append(nn.ReLU())
+        curr_dim = h_dim
+        
+    # Final layer to map back to gene expression
+    layers.append(nn.Linear(curr_dim, input_dim))
+    
+    return nn.Sequential(*layers)
 
 
 class InfoVAE(nn.Module):
@@ -59,27 +90,25 @@ class InfoVAE(nn.Module):
             self, 
             input_size: int, 
             latent_size: int, 
-            layers: int,
             lr: float,
             wd: float,
             mode: str,  # either "rna" or "atac"
             device,
-            lambda_mmd: float = 1.0,
+            lambda_mmd: float = 0.1,
             ):
         
         super(InfoVAE, self).__init__()
         
         self.input_size = int(input_size)
         self.latent_size = int(latent_size)
-        self.layers = int(layers)
         self.lambda_mmd = lambda_mmd
         self.mode = mode
 
-        self.encoder = init_encoder(self.layers, self.input_size, self.latent_size)
-        self.decoder = init_decoder(self.layers, self.input_size, self.latent_size)
+        self.encoder, final_enc_layer_size = init_encoder(self.input_size, self.latent_size)
+        self.decoder = init_decoder(self.latent_size, self.input_size)
 
-        self.fc_mu = nn.Linear(self.latent_size, self.latent_size)
-        self.fc_logvar = nn.Linear(self.latent_size, self.latent_size)
+        self.fc_mu = nn.Linear(final_enc_layer_size, self.latent_size)
+        self.fc_logvar = nn.Linear(final_enc_layer_size, self.latent_size)
 
         self.apply(self.weights_init)
         self.device = device
@@ -213,11 +242,11 @@ def train_infoVAE(
     model = InfoVAE(
         input_size=model_params["input_size"],
         latent_size=model_params["latent_size"],
-        layers=model_params["layers"],
         lr=model_params["lr"],
         wd=model_params["wd"],
         device=model_params["device"],
         mode=model_params["mode"],
+        lambda_mmd=model_params["lambda_mmd"]
     )
     model = torch.compile(model)
     log(str(model.parameters))
@@ -225,21 +254,20 @@ def train_infoVAE(
     training_losses = []
     validation_losses = []
     min_loss = np.inf
-    trained_model = copy.deepcopy(model)
+    #trained_model = copy.deepcopy(model)
     patience_counter = 0
     
-    log_section("TRAINING START")
     log_section("TRAINING START")
     for epoch in tqdm(range(0, epochs), initial=0, ncols=100, desc="\nEpochs", file=sys.stdout):
         
         # 1. Train first
         training_loss = model.train_one_epoch(train_loader)
-        training_loss_avg = training_loss / len(train_loader)
+        training_loss_avg = training_loss #/ len(train_loader) already divided by N in loss function!
         training_losses.append(training_loss_avg)
 
         # 2. Then validate
         validation_loss = model.validate(valid_loader)
-        validation_loss_avg = validation_loss / len(valid_loader)
+        validation_loss_avg = validation_loss #/ len(valid_loader)
         validation_losses.append(validation_loss_avg)
         
         # 3. Step scheduler based on the actual trained epoch
@@ -247,7 +275,7 @@ def train_infoVAE(
 
         if validation_loss_avg < min_loss:
             min_loss = validation_loss_avg
-            trained_model = copy.deepcopy(model)
+            best_state = copy.deepcopy(model._orig_mod.state_dict())
             patience_counter = 0
         else:
             patience_counter += 1
@@ -259,11 +287,12 @@ def train_infoVAE(
             break
         
     log_section("FINISHED TRAINING, SAVING MODEL")
+    model._orig_mod.load_state_dict(best_state)
     save_path = f"/workspace/models/{datetime.now()}_vae_model_weights.pth"
-    torch.save(trained_model.state_dict(), save_path)
+    torch.save(model.state_dict(), save_path)
     log(f"Model saved to {save_path}")
 
-    return trained_model, training_losses, validation_losses
+    return model, training_losses, validation_losses
 
 
 
