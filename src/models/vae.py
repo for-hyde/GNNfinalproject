@@ -233,10 +233,14 @@ def train_infoVAE(
         train_loader: DataLoader, 
         valid_loader: DataLoader, 
         epochs: int,
-        patience: int = 50
+        patience: int = 50,
+        save: bool = True,
+        log_path: str = "/workspace/logs",
+        restart_log: bool = True,
         ):
     
-    start_log("/workspace/logs", "infoVAE_training_run")
+    if restart_log:
+        start_log(log_path, "infoVAE_training_run")
     log_section("LOADING MODEL")
 
     model = InfoVAE(
@@ -254,7 +258,6 @@ def train_infoVAE(
     training_losses = []
     validation_losses = []
     min_loss = np.inf
-    #trained_model = copy.deepcopy(model)
     patience_counter = 0
     
     log_section("TRAINING START")
@@ -279,7 +282,7 @@ def train_infoVAE(
             patience_counter = 0
         else:
             patience_counter += 1
-
+        
         log(f"Epoch [{epoch+1}/{epochs}]: Train: {training_loss_avg:.4f}, Val: {validation_loss_avg:.4f}")
         
         if patience_counter >= patience:
@@ -287,10 +290,11 @@ def train_infoVAE(
             break
         
     log_section("FINISHED TRAINING, SAVING MODEL")
-    model._orig_mod.load_state_dict(best_state)
-    save_path = f"/workspace/models/{datetime.now()}_vae_model_weights.pth"
-    torch.save(model.state_dict(), save_path)
-    log(f"Model saved to {save_path}")
+    if save:
+        model._orig_mod.load_state_dict(best_state)
+        save_path = f"/workspace/models/{datetime.now()}_vae_model_weights.pth"
+        torch.save(model.state_dict(), save_path)
+        log(f"Model saved to {save_path}")
 
     return model, training_losses, validation_losses
 

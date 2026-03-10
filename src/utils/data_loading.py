@@ -143,15 +143,15 @@ def cell_type_split_dataset(dataset, annot, cell_col, cluster_col, test_ratio, v
         train_cells = cell_types_num[test_count + val_count:]
 
         test_types = {id_to_type[i] for i in test_cells}
-        mask = rna.obs[cell_col].isin(test_types)
-        test_indices = rna[mask]
+        mask = dataset.obs[cell_col].isin(test_types)
+        test_indices = dataset[mask]
         
         val_types = {id_to_type[i] for i in val_cells}
-        mask = rna.obs[cell_col].isin(val_types)
-        val_indices = rna[mask]
+        mask = dataset.obs[cell_col].isin(val_types)
+        val_indices = dataset[mask]
         
-        mask = ~rna.obs[cell_col].isin(test_types | val_types) 
-        train_indices = rna[mask]
+        mask = ~dataset.obs[cell_col].isin(test_types | val_types) 
+        train_indices = dataset[mask]
     
         return train_indices.obs.index, val_indices.obs.index, test_indices.obs.index
         

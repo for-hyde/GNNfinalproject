@@ -4,21 +4,19 @@ import scanpy as sc
 import matplotlib.pyplot as plt
 from torch.utils.data import DataLoader
 from models.vae import InfoVAE  # Adjust based on your actual class name
-from utils.data_loading import load_data, SingleDatasetVAE, uniform_split_dataset, cell_type_split_dataset
+from utils.data_loading import load_data, SingleDatasetVAE, uniform_split_dataset
 from utils.device import get_free_gpu
 from collections import OrderedDict
 
 
 
-rna, _ = load_data("bmmc_rna_highly_variable.h5ad", "bmmc_atac_highly_variable.h5ad", multiome=False)
-#_, _, test_idxs = uniform_split_dataset(rna, val_ratio=0.2, test_ratio=0.1)
-_, _, test_idxs = cell_type_split_dataset(rna, annot=True, cell_col='cell_type', cluster_col='leiden', test_ratio=0.1, val_ratio=0.2, seed=19193)
+_, atac = load_data("bmmc_rna_highly_variable.h5ad", "bmmc_atac_highly_variable.h5ad", multiome=False)
+_, _, test_idxs = uniform_split_dataset(atac, val_ratio=0.2, test_ratio=0.1)
 
-
-test_dataset = SingleDatasetVAE(rna, test_idxs)
+test_dataset = SingleDatasetVAE(atac, test_idxs)
 test_loader = DataLoader(test_dataset, batch_size=512, shuffle=False)
 
-input_size = rna.shape[1]
+input_size = atac.shape[1]
 
 model_params = {
     "input_size": input_size,
@@ -26,12 +24,12 @@ model_params = {
     "lr": 1e-3,
     "wd": 1e-5,
     "device": get_free_gpu(),
-    "mode": "rna",
+    "mode": "atac",
     "lambda_mmd": 0.1
 }
 
 model = InfoVAE(input_size=input_size, latent_size=64, lr=0, wd=0, mode="", device=model_params["device"])
-state_dict = torch.load("/workspace/models/2026-03-09 18:15:06.251604_vae_model_weights.pth")
+state_dict = torch.load("/workspace/models/2026-03-09 14:37:41.467220_vae_model_weights.pth")
 new_state_dict = OrderedDict()
 
 for k, v in state_dict.items():
@@ -62,8 +60,8 @@ original = np.concatenate(original)
 reconstructed = np.concatenate(reconstructed)
 latent_coords = np.concatenate(latent_coords)
 
-#switched from iloc to loc, as uniform splitting returns indices, but cell type splitting returns labels
-adata_latent = sc.AnnData(latent_coords, obs=rna.obs.loc[test_idxs])
+
+adata_latent = sc.AnnData(latent_coords, obs=atac.obs.iloc[test_idxs])
 adata_recon = sc.AnnData(np.vstack([original, reconstructed]))
 adata_recon.obs["type"] = ["Original"] * len(original) + ["Reconstructed"] * len(reconstructed)
 
