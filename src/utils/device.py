@@ -1,5 +1,7 @@
 import torch
 import subprocess as sp
+from collections import OrderedDict
+
 
 def get_free_gpu() -> torch.device:
 
@@ -22,3 +24,15 @@ def get_free_gpu() -> torch.device:
 
     # return the device with the most free memory
     return torch.device(gpu)
+
+
+def load_model(model, state_dict_path):
+    state_dict = torch.load(state_dict_path)
+    new_state_dict = OrderedDict()
+
+    for k, v in state_dict.items():
+        name = k.replace("_orig_mod.", "")
+        new_state_dict[name] = v
+
+    model.load_state_dict(new_state_dict)
+    return model

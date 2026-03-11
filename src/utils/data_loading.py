@@ -162,7 +162,7 @@ def cell_type_split_dataset(dataset, annot, cell_col, cluster_col, test_ratio, v
     #     return train_indices, val_indices, test_indices
         
     
-class MultiomeDatasetVAE(Dataset):
+class MultiomeDataset(Dataset):
     def __init__(self, rna, atac, indices):
         self.atac = atac 
         self.rna = rna 
@@ -231,8 +231,8 @@ def main():
 
     train_idx, val_idx = split_dataset(rna)
 
-    train_dataset = MultiomeDatasetVAE(rna, atac, train_idx)
-    val_dataset   = MultiomeDatasetVAE(rna, atac, val_idx)
+    train_dataset = MultiomeDataset(rna, atac, train_idx)
+    val_dataset   = MultiomeDataset(rna, atac, val_idx)
     train_dataloader = DataLoader(train_dataset, batch_size=64, shuffle=True)
     val_dataloader = DataLoader(val_dataset, batch_size=64, shuffle=True)
     

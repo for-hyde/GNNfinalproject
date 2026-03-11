@@ -290,8 +290,9 @@ def train_infoVAE(
             break
         
     log_section("FINISHED TRAINING, SAVING MODEL")
+    model._orig_mod.load_state_dict(best_state)
+    
     if save:
-        model._orig_mod.load_state_dict(best_state)
         save_path = f"/workspace/models/{datetime.now()}_vae_model_weights.pth"
         torch.save(model.state_dict(), save_path)
         log(f"Model saved to {save_path}")

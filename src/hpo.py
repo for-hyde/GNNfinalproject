@@ -41,7 +41,7 @@ DEVICE = get_free_gpu()
 def objective(trial):
     model_params = {
         "input_size": input_size,
-        "latent_size": trial.suggest_int("latent_size", 32, 128, step=16),
+        "latent_size": trial.suggest_int("latent_size", 32, 128, step=16),  # Considering both the RNA and ATAC model have to have the same latent dimension, this only has to be tuned once!
         "lr": trial.suggest_float("lr", 1e-4, 1e-2, log=True),
         "wd": trial.suggest_float("wd", 1e-6, 1e-3, log=True),
         "device": DEVICE,
@@ -73,8 +73,8 @@ def objective(trial):
             model_params=model_params,
             train_loader=fold_train_loader,
             valid_loader=fold_val_loader,
-            epochs=30,
-            patience=5,
+            epochs=200,
+            patience=50,
             log_path="/workspace/runs/rna_hpo",
             save=False,
             restart_log=False
