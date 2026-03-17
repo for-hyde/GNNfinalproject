@@ -31,11 +31,11 @@ input_size_atac = atac.shape[1]
 input_size_rna = rna.shape[1]
 
 model_params = {
-    "latent_dim": 64,
+    "latent_dim": 128,
     "rna_vae_input": input_size_rna,
     "atac_vae_input": input_size_atac,
-    "rna_vae_path": "/workspace/runs/rna_vae_training_run_3/2026-03-09 18:15:06.251604_vae_model_weights.pth",  # just placeholder state dictionary! 
-    "atac_vae_path": "/workspace/runs/atac_vae_training_run_1/2026-03-09 11:02:59.695223_vae_model_weights.pth",  # just placeholder state dictionary! 
+    "rna_vae_path": "/workspace/runs/rna_vae_run_1/2026-03-15 15:22:17.448786_vae_model_weights.pth",  # just placeholder state dictionary! 
+    "atac_vae_path": "/workspace/runs/atac_vae_run_1/2026-03-15 15:56:11.264790_vae_model_weights.pth",  # just placeholder state dictionary! 
     "device": get_free_gpu(),
 }
 
@@ -52,8 +52,8 @@ print(f"Final Training Loss: {train_loss[-1]:.4f}")
 plt.figure()
 plt.plot(train_loss, c="red")
 plt.plot(val_loss, c="blue")
-plt.savefig("/workspace/runs/test_rna_training_losses.png")
-plt.savefig("/workspace/runs/test_rna_training_losses.svg")
+plt.savefig("/workspace/runs/test_cfm_training_losses.png")
+plt.savefig("/workspace/runs/test_cfm_training_losses.svg")
 
 
 with open("/workspace/runs/losses.json", "w") as f:

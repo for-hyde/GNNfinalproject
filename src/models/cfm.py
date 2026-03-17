@@ -9,7 +9,7 @@ from torchdiffeq import odeint
 
 from utils.logging_utils import (start_log, log, log_section)
 from utils.device import load_model
-from models.vae import InfoVAE
+from models.vae_rna import InfoVAE
 import copy
 from datetime import datetime
 from tqdm import tqdm 
@@ -17,32 +17,25 @@ import sys
 
 
 class ModalityConverter(nn.Module):
-    def __init__(
-            self,
-            latent_dim: int,
-            rna_vae: InfoVAE,
-            atac_vae: InfoVAE,
-            device,
-            sigma: float = 0.1,
-        ):
-        super().__init__()  
-
+    def __init__(self, latent_dim, rna_vae, atac_vae, device, sigma=0.1):
+        super().__init__()
         self.sigma = sigma
         self.latent_dim = latent_dim
-
-        # CFM vector field model
         self.cfm_model = MLP(dim=latent_dim, time_varying=True, w=64)
         self.fm = ExactOptimalTransportConditionalFlowMatcher(sigma=self.sigma)
 
-        self.encoder_rna  = rna_vae.encoder
-        self.decoder_rna  = rna_vae.decoder
+        self.encoder_rna   = rna_vae.encoder
+        self.fc_mu_rna     = rna_vae.fc_mu        
+        self.decoder_rna   = rna_vae.decoder
 
-        self.encoder_atac = atac_vae.encoder
-        self.decoder_atac = atac_vae.decoder
+        self.encoder_atac  = atac_vae.encoder
+        self.fc_mu_atac    = atac_vae.fc_mu       
+        self.decoder_atac  = atac_vae.decoder
 
-        for module in [self.encoder_rna, self.decoder_rna, self.encoder_atac, self.decoder_atac]:
+        for module in [self.encoder_rna, self.fc_mu_rna, self.decoder_rna,
+                    self.encoder_atac, self.fc_mu_atac, self.decoder_atac]:
             self._freeze_module(module)
-        
+
         self.device = device
         self.to(self.device)
 
@@ -52,23 +45,26 @@ class ModalityConverter(nn.Module):
         for param in module.parameters():
             param.requires_grad = False
 
+    def _encode_rna(self, x):
+        return self.fc_mu_rna(self.encoder_rna(x))   
+
+    def _encode_atac(self, x):
+        return self.fc_mu_atac(self.encoder_atac(x)) 
+
     def forward(self, x_rna, x_atac):
         with torch.no_grad():
-            z_rna  = self.encoder_rna(x_rna)
-            z_atac = self.encoder_atac(x_atac)
+            z_rna  = self._encode_rna(x_rna)
+            z_atac = self._encode_atac(x_atac)
 
         t, zt, ut = self.fm.sample_location_and_conditional_flow(z_rna, z_atac)
         vt = self.cfm_model(torch.cat([zt, t[:, None]], dim=-1))
-
         return vt, ut
 
 
     def convert(self, x_rna):
-        z_rna = self.encoder_rna(x_rna)
-
+        z_rna = self._encode_rna(x_rna)
         t_span = torch.linspace(0, 1, 100, device=x_rna.device)
         z_atac_hat = odeint(self.vector_field, z_rna, t_span)[-1]
-
         return self.decoder_atac(z_atac_hat)
 
 
@@ -118,40 +114,21 @@ class ModalityConverter(nn.Module):
     
 
     @torch.no_grad()
-    def predict(
-        self,
-        x_rna: torch.Tensor,
-        n_steps: int = 100,
-        return_trajectory: bool = False,
-        ) -> torch.Tensor | tuple:
-        
-        """
-        Convert RNA to ATAC seq data at point of inference.
-
-        Args:
-        x_rna: RNA input  [samples, features]
-        n_steps: number of ODE integration steps (more = more accurate, slower)
-        return_trajectory: if True, returns all intermediate latents [n_steps, B, latent_dim]
-
-        Returns:
-        x_atac_hat:  predicted ATAC output  [B, D_atac]
-        """
-
+    def predict(self, x_rna, n_steps=100, return_trajectory=False):
         self.eval()
 
         x_rna = x_rna.to(self.device)
 
-        z_rna = self.encoder_rna(x_rna)
+        z_rna = self._encode_rna(x_rna)
 
         t_span = torch.linspace(0, 1, n_steps, device=self.device)
-        trajectory = odeint(self.vector_field, z_rna, t_span)  # [n_steps, samples, latent_dim]
-
-        z_atac_hat = trajectory[-1]  # Take only the last step to get a final [samples, latent_dim]
-        x_atac_hat = self.decoder_atac(z_atac_hat)  # decode this with atac decoder!
+        trajectory = odeint(self.vector_field, z_rna, t_span)
+        z_atac_hat = trajectory[-1]
+        x_atac_hat = self.decoder_atac(z_atac_hat)
 
         if return_trajectory:
             return x_atac_hat, trajectory
-
+        
         return x_atac_hat
     
 
@@ -171,8 +148,8 @@ def train_modality_converter(
     log_section("LOADING MODEL")
 
     # adjust latent dimension as needed! 
-    rna_model_raw = InfoVAE(input_size=model_params["rna_vae_input"], latent_size=64, lr=0, wd=0, mode="", device=model_params["device"])
-    atac_model_raw = InfoVAE(input_size=model_params["atac_vae_input"], latent_size=64, lr=0, wd=0, mode="", device=model_params["device"])
+    rna_model_raw = InfoVAE(input_size=model_params["rna_vae_input"], latent_size=model_params["latent_dim"], lr=0, wd=0, mode="", device=model_params["device"])
+    atac_model_raw = InfoVAE(input_size=model_params["atac_vae_input"], latent_size=model_params["latent_dim"], lr=0, wd=0, mode="", device=model_params["device"])
 
     rna_model = load_model(rna_model_raw, model_params["rna_vae_path"])
     atac_model = load_model(atac_model_raw, model_params["atac_vae_path"])
@@ -217,7 +194,7 @@ def train_modality_converter(
         else:
             patience_counter += 1
 
-        if (epoch+1)%100 == 0:
+        if (epoch+1)%10 == 0:
             log(f"Epoch [{epoch+1}/{epochs}]: Training Loss: {training_loss}, Validation Loss: {validation_loss}")
         
         if patience_counter >= patience:
@@ -228,7 +205,7 @@ def train_modality_converter(
     modality_converter._orig_mod.load_state_dict(best_state)
 
     if save:
-        save_path = f"/workspace/models/{datetime.now()}_vae_model_weights.pth"
+        save_path = f"/workspace/runs/{datetime.now()}_CFM_model_weights.pth"
         torch.save(modality_converter.state_dict(), save_path)
         log(f"Model saved to {save_path}")
 

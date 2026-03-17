@@ -85,7 +85,7 @@ def init_decoder(latent_dim, input_dim, hidden_dims=[256, 512, 1024]):
     return nn.Sequential(*layers)
 
 
-class InfoVAE(nn.Module):
+class InfoVAE_RNA(nn.Module):
     def __init__(
             self, 
             input_size: int, 
@@ -97,7 +97,7 @@ class InfoVAE(nn.Module):
             lambda_mmd: float = 0.1,
             ):
         
-        super(InfoVAE, self).__init__()
+        super(InfoVAE_RNA, self).__init__()
         
         self.input_size = int(input_size)
         self.latent_size = int(latent_size)
@@ -228,7 +228,7 @@ class InfoVAE(nn.Module):
 
 
 
-def train_infoVAE(
+def train_infoVAE_RNA(
         model_params: dict, 
         train_loader: DataLoader, 
         valid_loader: DataLoader, 
@@ -243,7 +243,7 @@ def train_infoVAE(
         start_log(log_path, "infoVAE_training_run")
     log_section("LOADING MODEL")
 
-    model = InfoVAE(
+    model = InfoVAE_RNA(
         input_size=model_params["input_size"],
         latent_size=model_params["latent_size"],
         lr=model_params["lr"],
@@ -293,7 +293,7 @@ def train_infoVAE(
     model._orig_mod.load_state_dict(best_state)
     
     if save:
-        save_path = f"/workspace/models/{datetime.now()}_vae_model_weights.pth"
+        save_path = f"/workspace/runs/{datetime.now()}_vae_model_weights.pth"
         torch.save(model.state_dict(), save_path)
         log(f"Model saved to {save_path}")
 

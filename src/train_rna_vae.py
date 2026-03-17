@@ -1,7 +1,7 @@
 import torch
 from torch.utils.data import DataLoader
 
-from models.vae import train_infoVAE
+from models.vae_rna import train_infoVAE_RNA
 from utils.device import get_free_gpu
 from utils.data_loading import load_data, split_dataset, SingleDatasetVAE, uniform_split_dataset, cell_type_split_dataset
 from utils.logging_utils import log, log_section, start_log
@@ -11,10 +11,11 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
 import json
+import numpy as np
 
 # Still load both rna and atac (_) data to ensure that we only use the rna data for which we also have the paired atac data! 
 rna, _ = load_data('bmmc_rna_highly_variable.h5ad', 'bmmc_atac_highly_variable.h5ad', multiome=False)
-
+print("RNA  — min:", rna.X.min(),  "max:", rna.X.max(),  "is_binary:", np.all(np.isin(rna.X.toarray(), [0, 1])))
 #train_idxs, val_idxs = split_dataset(rna)
 
 #train_idxs, val_idxs, test_idxs = uniform_split_dataset(rna, val_ratio=0.2, test_ratio=0.1)
@@ -37,15 +38,15 @@ print(f"Input Size: {input_size}")
 # Layer number is now hard coded into the model!
 model_params = {
     "input_size": input_size,
-    "latent_size": 64,
-    "lr": 5e-4,
-    "wd": 1e-5,
+    "latent_size": 256,
+    "lr": 0.00047270791344014953,
+    "wd": 3.259128771224827e-05,
     "device": get_free_gpu(),
     "mode": "rna",
-    "lambda_mmd": 0.1
+    "lambda_mmd": 1.0
 }
 
-trained_model, train_loss, val_loss = train_infoVAE(
+trained_model, train_loss, val_loss = train_infoVAE_RNA(
     model_params=model_params,
     train_loader=train_loader,
     valid_loader=val_loader,
@@ -58,11 +59,11 @@ print(f"Final Training Loss: {train_loss[-1]:.4f}")
 plt.figure()
 plt.plot(train_loss, c="red")
 plt.plot(val_loss, c="blue")
-plt.savefig("/workspace/plots/test_rna_training_losses.png")
-plt.savefig("/workspace/plots/test_rna_training_losses.svg")
+plt.savefig("/workspace/runs/test_rna_training_losses.png")
+plt.savefig("/workspace/runs/test_rna_training_losses.svg")
 
 
-with open("/workspace/plots/losses.json", "w") as f:
+with open("/workspace/runs/losses.json", "w") as f:
     json.dump({"train": train_loss, "val": val_loss}, f)
 
 # python train_rna_vae.py > /workspace/logs/rna_vae_test_training.log 2>&1 &

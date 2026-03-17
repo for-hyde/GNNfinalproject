@@ -9,15 +9,15 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
-from models.vae import train_infoVAE
+from models.vae_rna import train_infoVAE
 from utils.device import get_free_gpu
 from utils.data_loading import load_data, cell_type_split_dataset, SingleDatasetVAE, uniform_split_dataset
 from utils.logging_utils import (start_log, log, log_section)
 
-start_log("/workspace/runs/rna_vae_hpo", "RNA-VAE-HPO_log")
+start_log("/workspace/runs/atac_vae_hpo", "ATAC-VAE-HPO_log")
 
 # --- Data loading (done ONCE, outside the objective) ---
-rna, _ = load_data('bmmc_rna_highly_variable.h5ad', 'bmmc_atac_highly_variable.h5ad', multiome=False)
+_, atac = load_data('bmmc_rna_highly_variable.h5ad', 'bmmc_atac_highly_variable.h5ad', multiome=False)
 
 # train_idxs, val_idxs, test_idxs = cell_type_split_dataset(
 #     rna, annot=True, cell_col='cell_type', cluster_col='leiden',
@@ -25,9 +25,9 @@ rna, _ = load_data('bmmc_rna_highly_variable.h5ad', 'bmmc_atac_highly_variable.h
 # )
 
 log_section("LOADING DATA")
-train_idxs, val_idxs, test_idxs = uniform_split_dataset(rna, val_ratio=0.2, test_ratio=0.1)
+train_idxs, val_idxs, test_idxs = uniform_split_dataset(atac, val_ratio=0.2, test_ratio=0.1)
 
-train_dataset = SingleDatasetVAE(rna, train_idxs)
+train_dataset = SingleDatasetVAE(atac, train_idxs)
 #val_dataset   = SingleDatasetVAE(rna, val_idxs)
 
 train_loader = DataLoader(train_dataset, batch_size=512, shuffle=True, num_workers=4, pin_memory=True, persistent_workers=True)
@@ -41,11 +41,11 @@ DEVICE = get_free_gpu()
 def objective(trial):
     model_params = {
         "input_size": input_size,
-        "latent_size": trial.suggest_int("latent_size", 32, 128, step=16),  # Considering both the RNA and ATAC model have to have the same latent dimension, this only has to be tuned once!
+        "latent_size": 128, #trial.suggest_int("latent_size", 32, 128, step=16),  # Considering both the RNA and ATAC model have to have the same latent dimension, this only has to be tuned once!
         "lr": trial.suggest_float("lr", 1e-4, 1e-2, log=True),
         "wd": trial.suggest_float("wd", 1e-6, 1e-3, log=True),
         "device": DEVICE,
-        "mode": "rna",
+        "mode": "atac",
         "lambda_mmd": trial.suggest_float("lambda_mmd", 0.1, 0.5),
     }
 
@@ -61,11 +61,11 @@ def objective(trial):
         fold_val   = cv_indices[fold_val_idx]
 
         fold_train_loader = DataLoader(
-            SingleDatasetVAE(rna, fold_train),
+            SingleDatasetVAE(atac, fold_train),
             batch_size=512, shuffle=True, num_workers=4, pin_memory=True
         )
         fold_val_loader = DataLoader(
-            SingleDatasetVAE(rna, fold_val),
+            SingleDatasetVAE(atac, fold_val),
             batch_size=512, shuffle=False, num_workers=4, pin_memory=True
         )
 
@@ -75,7 +75,7 @@ def objective(trial):
             valid_loader=fold_val_loader,
             epochs=200,
             patience=50,
-            log_path="/workspace/runs/rna_hpo",
+            log_path="/workspace/runs/atac_hpo",
             save=False,
             restart_log=False
         )
@@ -89,24 +89,24 @@ sampler = TPESampler(seed=42)
 study = optuna.create_study(
     direction="minimize",
     sampler=sampler,
-    study_name="RNA_infoVAE_hpo",  #hpo for hyperparameter optimization
+    study_name="ATAC_infoVAE_hpo",  #hpo for hyperparameter optimization
 )
 
-study.optimize(objective, n_trials=50, gc_after_trial=True)
+study.optimize(objective, n_trials=30, gc_after_trial=True)
 
 best = study.best_trial
 log(f"Best val loss : {best.value:.4f}")
 log(f"Best params   : {best.params}")
 
 # Save best params
-with open("/workspace/runs/best_rnavae_hpo_params.json", "w") as f:
+with open("/workspace/runs/best_atacvae_hpo_params.json", "w") as f:
     json.dump(best.params, f, indent=2)
 
 try:
     fig = optuna.visualization.plot_param_importances(study)
-    fig.write_image("/workspace/runs/hpo_param_importances.png")
+    fig.write_image("/workspace/runs/hpo_param_importances_atac.png")
 
     fig2 = optuna.visualization.plot_optimization_history(study)
-    fig2.write_image("/workspace/runs/hpo_history.png")
+    fig2.write_image("/workspace/runs/hpo_history_atac.png")
 except Exception as e:
     log(f"Visualization skipped: {e}")

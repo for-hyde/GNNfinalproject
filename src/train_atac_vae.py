@@ -1,7 +1,7 @@
 import torch
 from torch.utils.data import DataLoader
 
-from models.vae import train_infoVAE
+from models.vae_rna import train_infoVAE
 from utils.device import get_free_gpu
 from utils.data_loading import load_data, split_dataset, SingleDatasetVAE, uniform_split_dataset, cell_type_split_dataset
 from utils.logging_utils import log, log_section, start_log
@@ -37,12 +37,12 @@ print(f"Input Size: {input_size}")
 # Layer number is now hard coded into the model!
 model_params = {
     "input_size": input_size,
-    "latent_size": 64,
-    "lr": 5e-4,
-    "wd": 1e-5,
+    "latent_size": 128,
+    "lr": 0.00034398502974696964,
+    "wd": 4.839134126781686e-05,
     "device": get_free_gpu(),
     "mode": "atac",
-    "lambda_mmd": 0.1
+    "lambda_mmd": 0.14479044679925782
 }
 
 trained_model, train_loss, val_loss = train_infoVAE(
@@ -58,11 +58,11 @@ print(f"Final Training Loss: {train_loss[-1]:.4f}")
 plt.figure()
 plt.plot(train_loss, c="red")
 plt.plot(val_loss, c="blue")
-plt.savefig("/workspace/plots/test_atac_training_losses.png")
-plt.savefig("/workspace/plots/test_atac_training_losses.svg")
+plt.savefig("/workspace/runs/test_atac_training_losses.png")
+plt.savefig("/workspace/runs/test_atac_training_losses.svg")
 
 
-with open("/workspace/plots/losses_atac.json", "w") as f:
+with open("/workspace/runs/losses_atac.json", "w") as f:
     json.dump({"train": train_loss, "val": val_loss}, f)
 
 # python train_atac_vae.py > /workspace/logs/atac_vae_test_training.log 2>&1 &
