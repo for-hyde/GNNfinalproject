@@ -9,7 +9,8 @@ from torchdiffeq import odeint
 
 from utils.logging_utils import (start_log, log, log_section)
 from utils.device import load_model
-from models.vae_rna import InfoVAE
+from models.vae_rna import InfoVAE_RNA
+from models.vae_atac import InfoVAE_ATAC
 import copy
 from datetime import datetime
 from tqdm import tqdm 
@@ -24,13 +25,13 @@ class ModalityConverter(nn.Module):
         self.cfm_model = MLP(dim=latent_dim, time_varying=True, w=64)
         self.fm = ExactOptimalTransportConditionalFlowMatcher(sigma=self.sigma)
 
-        self.encoder_rna   = rna_vae.encoder
-        self.fc_mu_rna     = rna_vae.fc_mu        
-        self.decoder_rna   = rna_vae.decoder
+        self.encoder_rna = rna_vae.encoder
+        self.fc_mu_rna = rna_vae.fc_mu        
+        self.decoder_rna = rna_vae.decoder
 
-        self.encoder_atac  = atac_vae.encoder
-        self.fc_mu_atac    = atac_vae.fc_mu       
-        self.decoder_atac  = atac_vae.decoder
+        self.encoder_atac = atac_vae.encoder
+        self.fc_mu_atac = atac_vae.fc_mu       
+        self.decoder_atac= atac_vae.mu_head #atac_vae.decoder
 
         for module in [self.encoder_rna, self.fc_mu_rna, self.decoder_rna,
                     self.encoder_atac, self.fc_mu_atac, self.decoder_atac]:
@@ -148,8 +149,20 @@ def train_modality_converter(
     log_section("LOADING MODEL")
 
     # adjust latent dimension as needed! 
-    rna_model_raw = InfoVAE(input_size=model_params["rna_vae_input"], latent_size=model_params["latent_dim"], lr=0, wd=0, mode="", device=model_params["device"])
-    atac_model_raw = InfoVAE(input_size=model_params["atac_vae_input"], latent_size=model_params["latent_dim"], lr=0, wd=0, mode="", device=model_params["device"])
+    rna_model_raw = InfoVAE_RNA(
+        input_size=model_params["rna_vae_input"], 
+        latent_size=model_params["latent_dim"], 
+        lr=0, wd=0, mode="", 
+        device=model_params["device"],
+        lambda_mmd=None,
+        )
+    
+    atac_model_raw = InfoVAE_ATAC(
+        input_size=model_params["atac_vae_input"], 
+        latent_size=model_params["latent_dim"], 
+        lr=0, wd=0, mode="", 
+        device=model_params["device"],
+        pos_weight=torch.ones(model_params["atac_vae_input"]).to(model_params["device"]))
 
     rna_model = load_model(rna_model_raw, model_params["rna_vae_path"])
     atac_model = load_model(atac_model_raw, model_params["atac_vae_path"])

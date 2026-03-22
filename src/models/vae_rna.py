@@ -2,13 +2,12 @@ import torch
 import numpy as np
 import sys
 from torch import nn
-from torch.amp.grad_scaler import GradScaler
 import torch.nn.functional as F
-from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 import copy
 from datetime import datetime
+from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts
 
 
 from utils.logging_utils import (start_log, log, log_section)
@@ -78,11 +77,12 @@ def init_decoder(latent_dim, input_dim, hidden_dims=[256, 512, 1024]):
         layers.append(nn.BatchNorm1d(h_dim))
         layers.append(nn.ReLU())
         curr_dim = h_dim
-        
-    # Final layer to map back to gene expression
-    layers.append(nn.Linear(curr_dim, input_dim))
     
-    return nn.Sequential(*layers)
+    
+    trunk   = nn.Sequential(*layers)
+    mu_head = nn.Linear(curr_dim, input_dim)   # curr_dim=1024 → 10000
+    
+    return trunk, mu_head
 
 
 class InfoVAE_RNA(nn.Module):
@@ -94,6 +94,7 @@ class InfoVAE_RNA(nn.Module):
             wd: float,
             mode: str,  # either "rna" or "atac"
             device,
+            #gene_weight,
             lambda_mmd: float = 0.1,
             ):
         
@@ -101,11 +102,22 @@ class InfoVAE_RNA(nn.Module):
         
         self.input_size = int(input_size)
         self.latent_size = int(latent_size)
-        self.lambda_mmd = lambda_mmd
+        #self.lambda_mmd = lambda_mmd
         self.mode = mode
 
+        self.lambda_kl = 0.0
+        self.lambda_recon = 40.0
+
+        if lambda_mmd == None:
+            self.lambda_mmd = 1.0
+        else: 
+            self.lambda_mmd = lambda_mmd
+
+        self.log_theta = nn.Parameter(torch.zeros(self.input_size))
+        #self.register_buffer("gene_weight", gene_weight.float())
+
         self.encoder, final_enc_layer_size = init_encoder(self.input_size, self.latent_size)
-        self.decoder = init_decoder(self.latent_size, self.input_size)
+        self.decoder, self.mu_head = init_decoder(self.latent_size, self.input_size)
 
         self.fc_mu = nn.Linear(final_enc_layer_size, self.latent_size)
         self.fc_logvar = nn.Linear(final_enc_layer_size, self.latent_size)
@@ -120,11 +132,15 @@ class InfoVAE_RNA(nn.Module):
             weight_decay=wd,
             )
 
-        self.scheduler = ReduceLROnPlateau(
-            self.optimizer,
-            mode="min",
-            factor=0.5,
-            patience=10,
+        # self.scheduler = ReduceLROnPlateau(
+        #     self.optimizer,
+        #     mode="min",
+        #     factor=0.5,
+        #     patience=10,
+        # )
+
+        self.scheduler = CosineAnnealingWarmRestarts(
+            self.optimizer, T_0=50, T_mult=1, eta_min=lr * 1e-2,
         )
 
         
@@ -150,7 +166,9 @@ class InfoVAE_RNA(nn.Module):
     
 
     def decode(self, z: torch.Tensor):
-        return self.decoder(z)
+        h = self.decoder(z)
+        recon = F.softplus(self.mu_head(h))
+        return recon
 
 
     def forward(self, x: torch.Tensor):
@@ -175,15 +193,56 @@ class InfoVAE_RNA(nn.Module):
 
         return z_kernel.mean() + prior_kernel.mean() - 2 * cross_kernel.mean()
 
-    def loss_function(self, x: torch.Tensor, x_recon: torch.Tensor, z: torch.Tensor, mu: torch.Tensor, logvar: torch.Tensor):
+
+    def _nb_loss(self, x: torch.Tensor, recon: torch.Tensor) -> torch.Tensor:
+        theta = self.log_theta.exp().clamp(1e-4, 1e4)   # [genes]
+        eps   = 1e-8
+ 
+        # NB log-likelihood (per element), summed over genes, mean over cells
+        log_theta_mu = torch.log(theta + recon + eps)
+        nb_ll = (
+            theta * (torch.log(theta + eps) - log_theta_mu)
+            + x   * (torch.log(recon  + eps) - log_theta_mu)
+            + torch.lgamma(x + theta)
+            - torch.lgamma(theta)
+            - torch.lgamma(x + 1)
+        )                                               
+ 
+        weighted = -(nb_ll * self.gene_weight).mean()
+        return weighted
+
+    def loss_function(
+            self,
+            x:      torch.Tensor,
+            recon:   torch.Tensor,
+            z:      torch.Tensor,
+            mu:     torch.Tensor,
+            logvar: torch.Tensor,
+            beta:   float = 1.0,   
+            ) -> torch.Tensor:
+
+        recon_loss = F.mse_loss(recon, x, reduction='mean') #self._nb_loss(x, recon)
+
+        kl_loss    = -0.5 * torch.mean(
+            1 + logvar - mu.pow(2) - logvar.exp(), #dim=-1
+        )#.mean()
+
+        mmd_loss   = self.compute_mmd(z)
+
+        return self.lambda_recon * recon_loss + (beta * self.lambda_kl * kl_loss) + (self.lambda_mmd * mmd_loss)
+    
+
+    # def loss_function(self, x, x_recon, z, mu, logvar, beta=1.0):
+    #     recon_loss = F.mse_loss(x_recon, x, reduction='mean')
         
-        recon_loss = F.mse_loss(x_recon, x, reduction='mean')
-        mmd_loss = self.compute_mmd(z)
+    #     # KL is currently zero — this is the main bug
+    #     kl_loss = -0.5 * torch.mean(1 + logvar - mu.pow(2) - logvar.exp())
+    #     mmd_loss = self.compute_mmd(z)
         
-        return recon_loss + (self.lambda_mmd * mmd_loss)
+    #     return recon_loss + (beta * kl_loss) + (self.lambda_mmd * mmd_loss)
 
 
-    def train_one_epoch(self, train_loader):
+    def train_one_epoch(self, train_loader, beta: float = 1.0):
         self.train()
         total_loss = 0
 
@@ -194,19 +253,24 @@ class InfoVAE_RNA(nn.Module):
                 batch_data = batch_data.to(self.device, non_blocking=True)
                 
                 x_recon, z, mu, logvar = self.forward(batch_data)
-                loss = self.loss_function(batch_data, x_recon, z, mu, logvar)
+                loss = self.loss_function(batch_data, x_recon, z, mu, logvar, beta)
 
             loss.backward()
             torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=1.0)
             self.optimizer.step()
             total_loss += loss.item()
         
+        recon_l = F.mse_loss(x_recon, batch_data)
+        kl_l    = -0.5 * torch.mean(1 + logvar - mu.pow(2) - logvar.exp())
+        mmd_l   = self.compute_mmd(z)
+        log(f"recon={recon_l:.4f}  kl={kl_l:.4f}  mmd={mmd_l:.4f}")
+
         total_loss /= len(train_loader)
         
         return total_loss
 
 
-    def validate(self, valid_loader):
+    def validate(self, valid_loader, beta: float = 1.0):
         self.eval()
 
         with torch.no_grad():
@@ -218,7 +282,7 @@ class InfoVAE_RNA(nn.Module):
                     batch_data = batch_data.to(self.device, non_blocking=True)
                     
                     x_recon, z, mu, logvar = self.forward(batch_data)
-                    loss = self.loss_function(batch_data, x_recon, z, mu, logvar)
+                    loss = self.loss_function(batch_data, x_recon, z, mu, logvar, beta)
                 
                 total_loss += loss.item()
         
@@ -226,6 +290,11 @@ class InfoVAE_RNA(nn.Module):
         
         return total_loss
 
+
+def _kl_beta(epoch: int, warmup_epochs: int = 20) -> float:
+    """Linear warm-up from 0 → 1 over warmup_epochs, then held at 1.
+    Prevents posterior collapse in early training."""
+    return min(1.0, epoch / max(warmup_epochs, 1))
 
 
 def train_infoVAE_RNA(
@@ -237,6 +306,7 @@ def train_infoVAE_RNA(
         save: bool = True,
         log_path: str = "/workspace/logs",
         restart_log: bool = True,
+        warmup_epochs: int = 20,
         ):
     
     if restart_log:
@@ -250,6 +320,7 @@ def train_infoVAE_RNA(
         wd=model_params["wd"],
         device=model_params["device"],
         mode=model_params["mode"],
+        #gene_weight=model_params["gene_weight"],
         lambda_mmd=model_params["lambda_mmd"]
     )
     model = torch.compile(model)
@@ -259,30 +330,34 @@ def train_infoVAE_RNA(
     validation_losses = []
     min_loss = np.inf
     patience_counter = 0
+    TRACK_FROM_EPOCH = warmup_epochs
     
     log_section("TRAINING START")
     for epoch in tqdm(range(0, epochs), initial=0, ncols=100, desc="\nEpochs", file=sys.stdout):
         
+        beta = _kl_beta(epoch, warmup_epochs)
+
         # 1. Train first
-        training_loss = model.train_one_epoch(train_loader)
+        training_loss = model.train_one_epoch(train_loader, beta)
         training_loss_avg = training_loss #/ len(train_loader) already divided by N in loss function!
         training_losses.append(training_loss_avg)
 
         # 2. Then validate
-        validation_loss = model.validate(valid_loader)
+        validation_loss = model.validate(valid_loader, beta)
         validation_loss_avg = validation_loss #/ len(valid_loader)
         validation_losses.append(validation_loss_avg)
         
         # 3. Step scheduler based on the actual trained epoch
-        model.scheduler.step(validation_loss_avg)
-
-        if validation_loss_avg < min_loss:
-            min_loss = validation_loss_avg
-            best_state = copy.deepcopy(model._orig_mod.state_dict())
-            patience_counter = 0
-        else:
-            patience_counter += 1
+        model.scheduler.step()
         
+        if epoch >= TRACK_FROM_EPOCH:
+            if validation_loss_avg < min_loss:
+                min_loss = validation_loss_avg
+                best_state = copy.deepcopy(model._orig_mod.state_dict())
+                patience_counter = 0
+            else:
+                patience_counter += 1
+            
         log(f"Epoch [{epoch+1}/{epochs}]: Train: {training_loss_avg:.4f}, Val: {validation_loss_avg:.4f}")
         
         if patience_counter >= patience:

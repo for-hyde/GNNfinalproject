@@ -9,9 +9,9 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
-from models.vae_rna import train_infoVAE
+from models.vae_rna import train_infoVAE_RNA
 from utils.device import get_free_gpu
-from utils.data_loading import load_data, cell_type_split_dataset, SingleDatasetVAE, uniform_split_dataset
+from utils.data_loading import load_data, SingleDatasetVAE, uniform_split_dataset
 from utils.logging_utils import (start_log, log, log_section)
 
 start_log("/workspace/runs/atac_vae_hpo", "ATAC-VAE-HPO_log")
@@ -69,7 +69,7 @@ def objective(trial):
             batch_size=512, shuffle=False, num_workers=4, pin_memory=True
         )
 
-        _, _, val_loss = train_infoVAE(
+        _, _, val_loss = train_infoVAE_RNA(
             model_params=model_params,
             train_loader=fold_train_loader,
             valid_loader=fold_val_loader,

@@ -8,6 +8,57 @@ from torch.utils.data import DataLoader
 import os 
 
 
+def get_gene_weight(data):
+    hvg_mask = data.var["highly_variable"]
+    adata_hvg = data[:, hvg_mask]
+
+    raw_weights = adata_hvg.var["dispersions_norm"].values.astype(np.float32)
+
+    gene_weights = raw_weights / (raw_weights.sum() + 1e-8) * adata_hvg.n_vars
+    gene_weights = torch.from_numpy(gene_weights)
+    return gene_weights
+
+def get_gene_weight_alt(data):
+    X = data.X
+    if hasattr(X, "toarray"):
+        X = X.toarray()
+    gene_var = X.var(axis=0).astype(np.float32)
+    w = gene_var / (gene_var.sum() + 1e-8) * data.n_vars
+    return torch.from_numpy(w)
+
+
+def get_atac_pos_weights(train_data, epsilon=1e-6, max_weight=20.0):
+    # train_data should be your raw binary numpy array or tensor (N, Peaks)
+    if torch.is_tensor(train_data):
+        train_data = train_data.cpu().numpy()
+        
+    n_cells = train_data.shape[0]
+    peak_sums = train_data.sum(axis=0) # How many cells have this peak open?
+    
+    # Ratio of closed cells to open cells for each peak
+    # If a peak is only open in 1% of cells, weight it ~100x more
+    pos_weights = (n_cells - peak_sums) / (peak_sums + epsilon)
+    pos_weights = np.clip(pos_weights, 1.0, max_weight)
+    
+    return torch.tensor(pos_weights, dtype=torch.float32)
+
+
+def separate_loader(data_dir, modality):
+
+    train_rna = ad.read_h5ad(os.path.join(data_dir, 'train_rna.h5ad'))
+    val_rna = ad.read_h5ad(os.path.join(data_dir, 'val_rna.h5ad'))
+    test_rna = ad.read_h5ad(os.path.join(data_dir, 'test_rna.h5ad'))
+
+    train_atac = ad.read_h5ad(os.path.join(data_dir,'train_atac.h5ad'))
+    val_atac = ad.read_h5ad(os.path.join(data_dir, 'val_atac.h5ad'))
+    test_atac = ad.read_h5ad(os.path.join(data_dir, 'test_atac.h5ad'))
+
+    if modality=='RNA':
+        return train_rna, val_rna, test_rna
+
+    elif modality=='ATAC':
+        return train_atac, val_atac, test_atac
+
 def load_data(rna, atac, multiome=False):
     
     #rna = ad.read_h5ad(os.path.join('/workspace/data', rna))
@@ -163,15 +214,15 @@ def cell_type_split_dataset(dataset, annot, cell_col, cluster_col, test_ratio, v
         
     
 class MultiomeDataset(Dataset):
-    def __init__(self, rna, atac, indices):
+    def __init__(self, rna, atac):
         self.atac = atac 
         self.rna = rna 
-        self.indices = indices
+        #self.indices = indices
     
         assert all(rna.obs_names == atac.obs_names)
 
-        rna = rna[indices]
-        atac = atac[indices]
+        #rna = rna[indices]
+        #atac = atac[indices]
         
         X_rna = rna.X
         if sp.issparse(X_rna):
@@ -190,11 +241,9 @@ class MultiomeDataset(Dataset):
     def __getitem__(self, idx):
         return self.X_rna[idx], self.X_atac[idx]
 
-
 class SingleDatasetVAE(Dataset):
-    def __init__(self, data, indices):
-        subset = data[indices]
-        X = subset.X
+    def __init__(self, data):
+        X = data.X
         if sp.issparse(X):
             X = X.toarray()
         self.X = torch.tensor(X, dtype=torch.float32)  # dense tensor, in memory once
@@ -204,6 +253,20 @@ class SingleDatasetVAE(Dataset):
 
     def __getitem__(self, idx):
         return self.X[idx]  # now just a fast tensor index
+
+#class SingleDatasetVAE(Dataset):
+#    def __init__(self, data, indices):
+#        subset = data[indices]
+#        X = subset.X
+#        if sp.issparse(X):
+#            X = X.toarray()
+#        self.X = torch.tensor(X, dtype=torch.float32)  # dense tensor, in memory once
+#
+#    def __len__(self):
+#        return self.X.shape[0]
+#
+#    def __getitem__(self, idx):
+#        return self.X[idx]  # now just a fast tensor index
     
     
 class MultiomeDatasetCMF(Dataset):

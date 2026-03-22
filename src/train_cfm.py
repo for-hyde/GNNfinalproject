@@ -2,7 +2,7 @@ from torch.utils.data import DataLoader
 
 from models.cfm import train_modality_converter
 from utils.device import get_free_gpu
-from utils.data_loading import load_data, MultiomeDataset, cell_type_split_dataset
+from utils.data_loading import load_data, MultiomeDataset, cell_type_split_dataset, separate_loader
 
 import matplotlib
 matplotlib.use('Agg')
@@ -10,8 +10,26 @@ import matplotlib.pyplot as plt
 
 import json
 
+
+####################################################################################################
+#                                                                                                  #
+# Short helper script for training CFM model                                                       #
+# Parameters can be adjusted in model_params. Most importantly load here the RNA and ATAC mdoels.  #
+# Currently it is set up to use the cell type split during training, changing to a uniform split   #
+# requires a change of the data path. Evaluation is performed in the test_rna_vae.py script.       #
+#                                                                                                  #
+####################################################################################################
+
+
+#################### Create Training and Validation Dataloaders ####################
+
+
+
 # Still load both rna and atac (_) data to ensure that we only use the rna data for which we also have the paired atac data! 
-rna, atac = load_data('bmmc_rna_highly_variable.h5ad', 'bmmc_atac_highly_variable.h5ad', multiome=False)
+#rna, atac = load_data('bmmc_rna_highly_variable.h5ad', 'bmmc_atac_highly_variable.h5ad', multiome=False)
+
+train_rna, val_rna, test_rna = separate_loader("/workspace/data/preprocessed_data/bmmc_celltype_split", "RNA")
+train_atac, val_atac, test_atac = separate_loader("/workspace/data/preprocessed_data/bmmc_celltype_split", "ATAC")
 
 #train_idxs, val_idxs = split_dataset(rna)
 
@@ -19,23 +37,23 @@ rna, atac = load_data('bmmc_rna_highly_variable.h5ad', 'bmmc_atac_highly_variabl
 
 # or
 
-train_idxs, val_idxs, test_idxs = cell_type_split_dataset(rna, annot=True, cell_col='cell_type', cluster_col='leiden', test_ratio=0.1, val_ratio=0.2, seed=19193)
+#train_idxs, val_idxs, test_idxs = cell_type_split_dataset(rna, annot=True, cell_col='cell_type', cluster_col='leiden', test_ratio=0.1, val_ratio=0.2, seed=19193)
 # Because the rna and atac datasets contain only common cells and are perfectly aligned, we can use the indices on only the rna, to subset also the atac data 
 
-train_dataset = MultiomeDataset(rna, atac, train_idxs)
-val_dataset   = MultiomeDataset(rna, atac, val_idxs)
+train_dataset = MultiomeDataset(train_rna, train_atac)
+val_dataset   = MultiomeDataset(val_rna, val_atac)
 train_loader = DataLoader(train_dataset, batch_size=512, shuffle=True, num_workers=4, pin_memory=True, persistent_workers=True)
 val_loader = DataLoader(val_dataset, batch_size=512, shuffle=False, num_workers=4, pin_memory=True, persistent_workers=True)
 
-input_size_atac = atac.shape[1]
-input_size_rna = rna.shape[1]
+input_size_atac = train_atac.shape[1]
+input_size_rna = train_rna.shape[1]
 
 model_params = {
     "latent_dim": 128,
     "rna_vae_input": input_size_rna,
     "atac_vae_input": input_size_atac,
-    "rna_vae_path": "/workspace/runs/rna_vae_run_1/2026-03-15 15:22:17.448786_vae_model_weights.pth",  # just placeholder state dictionary! 
-    "atac_vae_path": "/workspace/runs/atac_vae_run_1/2026-03-15 15:56:11.264790_vae_model_weights.pth",  # just placeholder state dictionary! 
+    "rna_vae_path": "/workspace/runs/rna_vae_training_run_11_redo/2026-03-22 22:26:13.913327_vae_model_weights.pth",  # just placeholder state dictionary! 
+    "atac_vae_path": "/workspace/runs/atac_vae_training_run_3_redo/2026-03-22 23:00:20.310592_vae_model_weights.pth",  # just placeholder state dictionary! 
     "device": get_free_gpu(),
 }
 
@@ -58,5 +76,3 @@ plt.savefig("/workspace/runs/test_cfm_training_losses.svg")
 
 with open("/workspace/runs/losses.json", "w") as f:
     json.dump({"train": train_loss, "val": val_loss}, f)
-
-# python train_rna_vae.py > /workspace/logs/rna_vae_test_training.log 2>&1 &
