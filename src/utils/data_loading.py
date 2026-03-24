@@ -8,6 +8,33 @@ from torch.utils.data import DataLoader
 import os 
 
 
+####################################################################################################
+#                                                                                                  #
+# DATA LOADING                                                                                     #
+# Collection of functions that help with data loading and processing prior to model training       #
+# Some functions are deprecated and not used anymore                                               #
+#                                                                                                  #
+####################################################################################################
+
+
+def threshold_to_match_sparsity(recon_probs, original, tolerance=0.005):
+    target_density = original.mean()  
+    
+    lo, hi = 0.0, 1.0
+    for _ in range(50):  
+        mid = (lo + hi) / 2
+        pred_density = (recon_probs > mid).mean()
+        if abs(pred_density - target_density) < tolerance:
+            break
+        if pred_density > target_density:
+            lo = mid
+        else:
+            hi = mid
+    
+    print(f"Threshold: {mid:.4f}, Pred density: {pred_density:.4f}, Target: {target_density:.4f}")
+    return (recon_probs > mid).astype(np.float32), mid
+
+
 def get_gene_weight(data):
     hvg_mask = data.var["highly_variable"]
     adata_hvg = data[:, hvg_mask]
@@ -45,18 +72,16 @@ def get_atac_pos_weights(train_data, epsilon=1e-6, max_weight=20.0):
 
 def separate_loader(data_dir, modality):
 
-    train_rna = ad.read_h5ad(os.path.join(data_dir, 'train_rna.h5ad'))
-    val_rna = ad.read_h5ad(os.path.join(data_dir, 'val_rna.h5ad'))
-    test_rna = ad.read_h5ad(os.path.join(data_dir, 'test_rna.h5ad'))
-
-    train_atac = ad.read_h5ad(os.path.join(data_dir,'train_atac.h5ad'))
-    val_atac = ad.read_h5ad(os.path.join(data_dir, 'val_atac.h5ad'))
-    test_atac = ad.read_h5ad(os.path.join(data_dir, 'test_atac.h5ad'))
-
     if modality=='RNA':
+        train_rna = ad.read_h5ad(os.path.join(data_dir, 'train_rna.h5ad'))
+        val_rna = ad.read_h5ad(os.path.join(data_dir, 'val_rna.h5ad'))
+        test_rna = ad.read_h5ad(os.path.join(data_dir, 'test_rna.h5ad'))
         return train_rna, val_rna, test_rna
 
     elif modality=='ATAC':
+        train_atac = ad.read_h5ad(os.path.join(data_dir,'train_atac.h5ad'))
+        val_atac = ad.read_h5ad(os.path.join(data_dir, 'val_atac.h5ad'))
+        test_atac = ad.read_h5ad(os.path.join(data_dir, 'test_atac.h5ad'))
         return train_atac, val_atac, test_atac
 
 def load_data(rna, atac, multiome=False):

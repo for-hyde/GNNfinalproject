@@ -19,7 +19,7 @@ import json
 
 #################### Create Training and Validation Dataloaders ####################
 
-train_atac, val_atac, test_atac = separate_loader("/workspace/data/preprocessed_data/bmmc_celltype_split", "ATAC")
+train_atac, val_atac, test_atac = separate_loader("/workspace/data/preprocessed_data/integrated_celltype_split", "ATAC")
 #gene_weight = get_gene_weight_alt(train_atac)
 atac_pos_weights = get_atac_pos_weights(train_atac.X)
 
@@ -55,7 +55,7 @@ trained_model, train_loss, val_loss = train_infoVAE_ATAC(
     model_params=model_params,
     train_loader=train_loader,
     valid_loader=val_loader,
-    epochs=500,
+    epochs=200,
     patience=50
 )  # Saving of model is handled within train_infoVAE_ATAC itself
 print(f"Final Training Loss: {train_loss[-1]:.4f}")

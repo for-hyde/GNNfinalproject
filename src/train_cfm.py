@@ -28,8 +28,8 @@ import json
 # Still load both rna and atac (_) data to ensure that we only use the rna data for which we also have the paired atac data! 
 #rna, atac = load_data('bmmc_rna_highly_variable.h5ad', 'bmmc_atac_highly_variable.h5ad', multiome=False)
 
-train_rna, val_rna, test_rna = separate_loader("/workspace/data/preprocessed_data/bmmc_celltype_split", "RNA")
-train_atac, val_atac, test_atac = separate_loader("/workspace/data/preprocessed_data/bmmc_celltype_split", "ATAC")
+train_rna, val_rna, test_rna = separate_loader("/workspace/data/preprocessed_data/integrated_celltype_split", "RNA")
+train_atac, val_atac, test_atac = separate_loader("/workspace/data/preprocessed_data/integrated_celltype_split", "ATAC")
 
 #train_idxs, val_idxs = split_dataset(rna)
 
@@ -52,8 +52,8 @@ model_params = {
     "latent_dim": 128,
     "rna_vae_input": input_size_rna,
     "atac_vae_input": input_size_atac,
-    "rna_vae_path": "/workspace/runs/rna_vae_training_run_11_redo/2026-03-22 22:26:13.913327_vae_model_weights.pth",  # just placeholder state dictionary! 
-    "atac_vae_path": "/workspace/runs/atac_vae_training_run_3_redo/2026-03-22 23:00:20.310592_vae_model_weights.pth",  # just placeholder state dictionary! 
+    "rna_vae_path": "/workspace/runs/rna_vae_training_run_integrated/2026-03-23 19:44:16.127080_vae_model_weights.pth",  # just placeholder state dictionary! 
+    "atac_vae_path": "/workspace/runs/atac_vae_training_run_integrated/2026-03-23 20:52:24.405348_vae_model_weights.pth",  # just placeholder state dictionary! 
     "device": get_free_gpu(),
 }
 
@@ -61,8 +61,8 @@ trained_model, train_loss, val_loss = train_modality_converter(
     model_params=model_params,
     train_loader=train_loader,
     valid_loader=val_loader,
-    epochs=500,
-    patience=50
+    epochs=1000,
+    patience=100
 )
 
 print(f"Final Training Loss: {train_loss[-1]:.4f}")
