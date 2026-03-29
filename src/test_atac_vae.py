@@ -32,8 +32,9 @@ CUSTOM_CMAP = plt.get_cmap('PiYG')
 ######################################## Config ########################################
 
 DATA_DIR = "/workspace/data/preprocessed_data/integrated_uniform_split"
-MODEL_PATH = "/workspace/runs/atac_vae_training_run_integrated/2026-03-23 20:52:24.405348_vae_model_weights.pth"
-EVAL_OUT_DIR = "/workspace/final_evaluation/atac_vae_uniform"
+#MODEL_PATH = "/workspace/runs/atac_vae_training_run_integrated/2026-03-23 20:52:24.405348_vae_model_weights.pth"
+MODEL_PATH = "/workspace/runs/2026-03-25 22:34:44.782109_vae_model_weights.pth"
+EVAL_OUT_DIR = "/workspace/final_evaluation/atac_vae_uniform_kl"
 os.makedirs(EVAL_OUT_DIR, exist_ok=True)
 
 ######################################## Load Data and Model ########################################
@@ -167,47 +168,87 @@ fig.savefig(f"{EVAL_OUT_DIR}/peak_mean_scatter.svg")
 plt.close(fig)
 
 
+# ######################################## Latent UMAP ########################################
+
+# adata_latent = sc.AnnData(latent_coords, obs=test_atac.obs.copy())
+
+# sc.pp.neighbors(adata_latent)
+# sc.tl.umap(adata_latent)
+# sc.pl.umap(adata_latent, color=["cell_type"], title="Latent Space UMAP", show=False, palette="PiYG")
+# plt.tight_layout()
+# plt.savefig(f"{EVAL_OUT_DIR}/latent_umap.png")
+# plt.savefig(f"{EVAL_OUT_DIR}/latent_umap.svg")
+
+# recon_binary_fixed = (reconstructed > threshold).astype(np.float32)
+# recon_tensor = torch.tensor(recon_binary_fixed).to(device)
+# latent_recon = []
+
+# with torch.no_grad():
+#     for i in range(0, len(recon_tensor), 512):
+#         batch = recon_tensor[i:i+512]
+#         _, mu, _ = model.encode(batch)
+#         latent_recon.append(mu.cpu().numpy())
+
+# latent_recon = np.concatenate(latent_recon)
+
+
+# ######################################## Compare Original to Recon ########################################
+
+# adata_compare = sc.AnnData(np.vstack([latent_coords, latent_recon]))
+# adata_compare.obs["source"] = ["Original"] * len(latent_coords) + ["Reconstructed"] * len(latent_recon)
+# adata_compare.obs["cell_type"] = np.concatenate([test_atac.obs["cell_type"].values, test_atac.obs["cell_type"].values])
+
+# sc.pp.neighbors(adata_compare)
+# sc.tl.umap(adata_compare)
+
+# fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+
+# sc.pl.umap(adata_compare, color="source", ax=axes[0], palette="PiYG", title="Original vs. Reconstructed (latent)", show=False)
+
+# sc.pl.umap(adata_compare, color="cell_type", ax=axes[1], palette="Set2", title="Cell type structure (latent)", show=False)
+
+# fig.tight_layout()
+# fig.savefig(f"{EVAL_OUT_DIR}/recon_vs_input_umap.png", dpi=150)
+# fig.savefig(f"{EVAL_OUT_DIR}/recon_vs_input_umap.svg")
+# plt.close(fig)
+
+# print(f"Evaluation plots saved to {EVAL_OUT_DIR}")
+
 ######################################## Latent UMAP ########################################
 
 adata_latent = sc.AnnData(latent_coords, obs=test_atac.obs.copy())
-
 sc.pp.neighbors(adata_latent)
 sc.tl.umap(adata_latent)
-sc.pl.umap(adata_latent, color=["cell_type"], title="Latent Space UMAP", show=False, palette="PiYG")
-plt.savefig(f"{EVAL_OUT_DIR}/latent_umap.png")
-plt.savefig(f"{EVAL_OUT_DIR}/latent_umap.svg")
 
-recon_binary_fixed = (reconstructed > threshold).astype(np.float32)
-recon_tensor = torch.tensor(recon_binary_fixed).to(device)
-latent_recon = []
+adata_recon = sc.AnnData(np.vstack([original, reconstructed]))
+adata_recon.obs["type"] = ["Original"] * len(original) + ["Reconstructed"] * len(reconstructed)
+sc.pp.pca(adata_recon)
+sc.pp.neighbors(adata_recon)
+sc.tl.umap(adata_recon)
 
-with torch.no_grad():
-    for i in range(0, len(recon_tensor), 512):
-        batch = recon_tensor[i:i+512]
-        _, mu, _ = model.encode(batch)
-        latent_recon.append(mu.cpu().numpy())
+fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
 
-latent_recon = np.concatenate(latent_recon)
+sc.pl.umap(
+    adata_latent,
+    color=["cell_type"],
+    title="Latent Space UMAP",
+    show=False,
+    palette="PiYG",
+    ax=ax1
+)
 
+sc.pl.umap(
+    adata_recon,
+    color="type",
+    title="Input vs. Reconstructed",
+    show=False,
+    palette="Set2",
+    ax=ax2
+)
 
-######################################## Compare Original to Recon ########################################
-
-adata_compare = sc.AnnData(np.vstack([latent_coords, latent_recon]))
-adata_compare.obs["source"] = ["Original"] * len(latent_coords) + ["Reconstructed"] * len(latent_recon)
-adata_compare.obs["cell_type"] = np.concatenate([test_atac.obs["cell_type"].values, test_atac.obs["cell_type"].values])
-
-sc.pp.neighbors(adata_compare)
-sc.tl.umap(adata_compare)
-
-fig, axes = plt.subplots(1, 2, figsize=(14, 5))
-
-sc.pl.umap(adata_compare, color="source", ax=axes[0], palette="PiYG", title="Original vs. Reconstructed (latent)", show=False)
-
-sc.pl.umap(adata_compare, color="cell_type", ax=axes[1], palette="PiYG", title="Cell type structure (latent)", show=False)
-
-fig.tight_layout()
-fig.savefig(f"{EVAL_OUT_DIR}/recon_vs_input_umap.png", dpi=150)
-fig.savefig(f"{EVAL_OUT_DIR}/recon_vs_input_umap.svg")
-plt.close(fig)
+plt.tight_layout()
+plt.savefig(f"{EVAL_OUT_DIR}/recon_vs_input_umap.png", bbox_inches='tight')
+plt.savefig(f"{EVAL_OUT_DIR}/recon_vs_input_umap.svg", bbox_inches='tight')
+plt.close()
 
 print(f"Evaluation plots saved to {EVAL_OUT_DIR}")

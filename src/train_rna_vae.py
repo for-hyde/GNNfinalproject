@@ -19,7 +19,7 @@ import json
 
 #################### Create Training and Validation Dataloaders ####################
 
-train_rna, val_rna, test_rna = separate_loader("/workspace/data/preprocessed_data/integrated_celltype_split", "RNA")
+train_rna, val_rna, test_rna = separate_loader("/workspace/data/preprocessed_data/integrated_uniform_split", "RNA")
 #gene_weight = get_gene_weight(train_rna)
 
 train_dataset = SingleDatasetVAE(train_rna)

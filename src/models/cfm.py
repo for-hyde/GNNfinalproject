@@ -253,7 +253,7 @@ class ModalityConverter(nn.Module):
             loss.backward()
 
             optimizer.step()
-            scheduler.step()
+            #scheduler.step()
 
             total_loss += loss.item()
 
@@ -356,11 +356,15 @@ def train_modality_converter(
 
     ot_cfm_optimizer = torch.optim.AdamW(modality_converter.parameters(), lr=1e-3, weight_decay=1e-5)
 
-    scheduler = torch.optim.lr_scheduler.OneCycleLR(
-        ot_cfm_optimizer, 
-        max_lr=1e-3, 
-        steps_per_epoch=len(train_loader), 
-        epochs=epochs
+    # scheduler = torch.optim.lr_scheduler.OneCycleLR(
+    #     ot_cfm_optimizer, 
+    #     max_lr=1e-3, 
+    #     steps_per_epoch=len(train_loader), 
+    #     epochs=epochs
+    # )
+
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+        ot_cfm_optimizer, T_max=epochs, eta_min=1e-5
     )
 
     training_losses = []
@@ -382,6 +386,8 @@ def train_modality_converter(
 
         validation_loss = modality_converter.validate(valid_loader)
         validation_losses.append(validation_loss)
+
+        scheduler.step()
 
         if validation_loss < min_loss:
             min_loss = validation_loss

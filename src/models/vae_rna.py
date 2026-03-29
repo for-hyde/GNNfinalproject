@@ -105,7 +105,7 @@ class InfoVAE_RNA(nn.Module):
         #self.lambda_mmd = lambda_mmd
         self.mode = mode
 
-        self.lambda_kl = 0.0
+        self.lambda_kl = 0.01
         self.lambda_recon = 40.0
 
         if lambda_mmd == None:
@@ -192,6 +192,22 @@ class InfoVAE_RNA(nn.Module):
         cross_kernel = rbf_kernel(z, prior_z)
 
         return z_kernel.mean() + prior_kernel.mean() - 2 * cross_kernel.mean()
+
+    # def compute_mmd(self, z: torch.Tensor):
+    #     z = z.to(torch.float32)
+    #     prior_z = torch.randn_like(z)
+
+    #     def rbf_kernel(x1, x2, sigma=None):
+    #         dist = torch.cdist(x1, x2, p=2.0).pow(2)
+    #         if sigma is None:
+    #             # Median heuristic — adapts to actual latent geometry
+    #             sigma = dist.median().clamp(min=1e-2)
+    #         return torch.exp(-dist / sigma)
+
+    #     z_kernel     = rbf_kernel(z, z)
+    #     prior_kernel = rbf_kernel(prior_z, prior_z)
+    #     cross_kernel = rbf_kernel(z, prior_z)
+    #     return z_kernel.mean() + prior_kernel.mean() - 2 * cross_kernel.mean()
 
 
     def _nb_loss(self, x: torch.Tensor, recon: torch.Tensor) -> torch.Tensor:

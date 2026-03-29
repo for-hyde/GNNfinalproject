@@ -19,9 +19,10 @@ CUSTOM_CMAP = plt.get_cmap('PiYG')
 
 ######################################## Config ########################################
 
-DATA_DIR = "/workspace/data/preprocessed_data/integrated_uniform_split"
-MODEL_PATH = "/workspace/runs/rna_vae_training_run_integrated/2026-03-23 19:44:16.127080_vae_model_weights.pth"
-EVAL_OUT_DIR = "/workspace/final_evaluation/rna_vae_uniform"
+DATA_DIR = "/workspace/data/preprocessed_data/integrated_celltype_split"
+#MODEL_PATH = "/workspace/runs/rna_vae_training_run_integrated/2026-03-23 19:44:16.127080_vae_model_weights.pth"
+MODEL_PATH = "/workspace/final_evaluation/final_models/RNA_vae_model_celltype.pth"
+EVAL_OUT_DIR = "/workspace/final_evaluation/rna_vae_celltype_kl"
 os.makedirs(EVAL_OUT_DIR, exist_ok=True)
 
 ######################################## Load Data and Model ########################################
@@ -143,18 +144,35 @@ fig.savefig(f"{EVAL_OUT_DIR}/gene_mean_scatter.svg")
 adata_latent = sc.AnnData(latent_coords, obs=test_rna.obs.copy())
 sc.pp.neighbors(adata_latent)
 sc.tl.umap(adata_latent)
-sc.pl.umap(adata_latent, color=["cell_type"], title="Latent Space UMAP", show=False, palette="PiYG")
-plt.savefig(f"{EVAL_OUT_DIR}/latent_umap.png")
-plt.savefig(f"{EVAL_OUT_DIR}/latent_umap.svg")
 
-# Input vs Reconstruction
 adata_recon = sc.AnnData(np.vstack([original, reconstructed]))
 adata_recon.obs["type"] = ["Original"] * len(original) + ["Reconstructed"] * len(reconstructed)
 sc.pp.pca(adata_recon)
 sc.pp.neighbors(adata_recon)
 sc.tl.umap(adata_recon)
-sc.pl.umap(adata_recon, color="type", title="Input vs. Reconstructed", show=False, palette="PiYG")
-plt.savefig(f"{EVAL_OUT_DIR}/recon_vs_input_umap.png")
-plt.savefig(f"{EVAL_OUT_DIR}/recon_vs_input_umap.svg")
 
-print(f"Evaluation plots saved to {EVAL_OUT_DIR}")
+fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
+
+sc.pl.umap(
+    adata_latent, 
+    color=["cell_type"], 
+    title="Latent Space UMAP", 
+    show=False, 
+    palette="PiYG", 
+    ax=ax1
+)
+
+sc.pl.umap(
+    adata_recon, 
+    color="type", 
+    title="Input vs. Reconstructed", 
+    show=False, 
+    palette="Set2", # Changed for contrast, feel free to keep PiYG
+    ax=ax2
+)
+
+plt.tight_layout()
+plt.savefig(f"{EVAL_OUT_DIR}/recon_vs_input_umap.png", bbox_inches='tight')
+plt.savefig(f"{EVAL_OUT_DIR}/recon_vs_input_umap.svg", bbox_inches='tight')
+plt.show()
+

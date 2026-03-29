@@ -133,7 +133,7 @@ class InfoVAE_ATAC(nn.Module):
         self.latent_size = int(latent_size)
         #self.lambda_mmd = lambda_mmd
         self.mode = mode
-        self.lambda_kl = 0.0
+        self.lambda_kl = 0.01
         self.lambda_recon = 40.0
 
         if lambda_mmd == None:
@@ -141,7 +141,7 @@ class InfoVAE_ATAC(nn.Module):
         else: 
             self.lambda_mmd = lambda_mmd
 
-        self.log_theta = nn.Parameter(torch.zeros(self.input_size))
+        #self.log_theta = nn.Parameter(torch.zeros(self.input_size))
         # self.register_buffer("gene_weight", gene_weight.float())
 
         self.encoder, final_enc_layer_size = init_encoder(self.input_size, self.latent_size)
@@ -224,6 +224,22 @@ class InfoVAE_ATAC(nn.Module):
         cross_kernel = rbf_kernel(z, prior_z)
 
         return z_kernel.mean() + prior_kernel.mean() - 2 * cross_kernel.mean()
+
+    # def compute_mmd(self, z: torch.Tensor):
+    #     z = z.to(torch.float32)
+    #     prior_z = torch.randn_like(z)
+
+    #     def rbf_kernel(x1, x2, sigma=None):
+    #         dist = torch.cdist(x1, x2, p=2.0).pow(2)
+    #         if sigma is None:
+    #             # Median heuristic — adapts to actual latent geometry
+    #             sigma = dist.median().clamp(min=1e-2)
+    #         return torch.exp(-dist / sigma)
+
+    #     z_kernel     = rbf_kernel(z, z)
+    #     prior_kernel = rbf_kernel(prior_z, prior_z)
+    #     cross_kernel = rbf_kernel(z, prior_z)
+    #     return z_kernel.mean() + prior_kernel.mean() - 2 * cross_kernel.mean()
 
 
     def focal_loss(self, logits, x, gamma=2.0):

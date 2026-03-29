@@ -24,8 +24,23 @@ from utils.device import load_model, get_free_gpu
 from utils.data_loading import load_data, MultiomeDataset, cell_type_split_dataset, separate_loader, get_atac_pos_weights, threshold_to_match_sparsity
 
 # Set global colormap
-plt.rcParams['image.cmap'] = 'PiYG'
-CUSTOM_CMAP = plt.get_cmap('PiYG')
+plt.rcParams['image.cmap'] = 'managua'
+CUSTOM_CMAP = plt.get_cmap('managua')
+
+# from matplotlib.colors import LinearSegmentedColormap
+
+# custom_map_obj = sns.diverging_palette(300, 120, s=80, l=40, as_cmap=True)
+
+# # 2. Register it so Matplotlib recognizes the name "my_piyg"
+# try:
+#     cm.register_cmap("PiYG", custom_map_obj)
+# except:
+#     # If already registered in this session, just get it
+#     pass
+
+# # 3. Set the global rcParam to the string name you just registered
+# plt.rcParams['image.cmap'] = "PiYG"
+# CUSTOM_CMAP = plt.get_cmap("PiYG")
 
 
 def threshold_to_match_sparsity(probs: np.ndarray, original: np.ndarray,
@@ -89,14 +104,14 @@ def load_state(model, path, device):
     return model
 
 
-EVAL_OUT_DIR = "/workspace/runs/"
+EVAL_OUT_DIR = "/workspace/final_evaluation/cfm_uniform_final_kl/"
 os.makedirs(EVAL_OUT_DIR, exist_ok=True)
 
 MODEL_PARAMS = {
     "latent_dim":    128,
-    "rna_vae_path":  "/workspace/runs/rna_vae_training_run_integrated/2026-03-23 19:44:16.127080_vae_model_weights.pth",
-    "atac_vae_path": "/workspace/runs/atac_vae_training_run_integrated/2026-03-23 20:52:24.405348_vae_model_weights.pth",
-    "cfm_path":      "/workspace/runs/2026-03-24 21:47:21.063026_CFM_model_weights.pth",
+    "rna_vae_path":  "/workspace/final_evaluation/final_models/RNA_vae_model_celltype.pth",
+    "atac_vae_path": "/workspace/final_evaluation/final_models/ATAC_vae_model_celltype.pth",
+    "cfm_path":      "/workspace/final_evaluation/final_models/CFM_model_celltype.pth",
     "device":        get_free_gpu(),
 }
 
@@ -106,9 +121,9 @@ CFM_STEPS  = 100
 
 print("\n── Loading data ──")
 train_rna,  val_rna,  test_rna  = separate_loader(
-    "/workspace/data/preprocessed_data/integrated_celltype_split", "RNA")
+    "/workspace/data/preprocessed_data/integrated_uniform_split", "RNA")
 train_atac, val_atac, test_atac = separate_loader(
-    "/workspace/data/preprocessed_data/integrated_celltype_split", "ATAC")
+    "/workspace/data/preprocessed_data/integrated_uniform_split", "ATAC")
 
 test_dataset = MultiomeDataset(test_rna, test_atac)
 test_loader  = DataLoader(test_dataset, batch_size=BATCH_SIZE, shuffle=False,
