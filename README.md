@@ -35,8 +35,8 @@ Training used three paired scRNA-seq / scATAC-seq datasets from human blood cell
 The BMMC dataset can be accessed from the [NCBI Gene Expression Omnibus](https://www.ncbi.nlm.nih.gov/geo/) under accession number **GSE194122**. The PBMC datasets are available from the [10X Genomics website](https://www.10xgenomics.com/datasets): search *"10k Human PBMCs, Multiome v1.0, Chromium X"* for the male donor, and *"PBMC from a Healthy Donor - Granulocytes Removed Through Cell Sorting (10k)"* for the female donor. The batch integrated datasets are depicted below: (left) RNA, (right) ATAC. PBMC dataset lack cell type annotations.
 
 <p float="left">
-  <img src="figures/umapmerged_rna_integrated_scvi.png" width="450" />
-  <img src="figures/umapmerged_atac_integrated_peakvi.png" width="450" /> 
+  <img src="figures/umapmerged_rna_integrated_scvi.png" width="380" />
+  <img src="figures/umapmerged_atac_integrated_peakvi.png" width="380" /> 
 </p>
 
 ---
