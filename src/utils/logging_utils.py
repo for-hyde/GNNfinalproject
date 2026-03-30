@@ -29,12 +29,12 @@ def start_log(log_dir: str, run_name: str) -> str:
 
     _logger = logging.getLogger(run_name)
     _logger.setLevel(logging.DEBUG)
-    _logger.propagate = False  # don't double-log if root logger has handlers
+    _logger.propagate = False 
 
     fmt = _OffsetFormatter(
         fmt="%(asctime)s | %(levelname)-8s | %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
-        offset_hours=1,   # <-- change this as needed
+        offset_hours=1,
     )
 
     fh = logging.FileHandler(log_path, encoding="utf-8")

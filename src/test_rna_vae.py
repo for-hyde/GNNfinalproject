@@ -20,7 +20,6 @@ CUSTOM_CMAP = plt.get_cmap('PiYG')
 ######################################## Config ########################################
 
 DATA_DIR = "/workspace/data/preprocessed_data/integrated_celltype_split"
-#MODEL_PATH = "/workspace/runs/rna_vae_training_run_integrated/2026-03-23 19:44:16.127080_vae_model_weights.pth"
 MODEL_PATH = "/workspace/final_evaluation/final_models/RNA_vae_model_celltype.pth"
 EVAL_OUT_DIR = "/workspace/final_evaluation/rna_vae_celltype_kl"
 os.makedirs(EVAL_OUT_DIR, exist_ok=True)

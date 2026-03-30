@@ -16,11 +16,11 @@ import json
 #                                                                                                  #
 ####################################################################################################
 
+DATA_PATH = "/workspace/data/preprocessed_data/integrated_uniform_split"
 
 #################### Create Training and Validation Dataloaders ####################
 
-train_atac, val_atac, test_atac = separate_loader("/workspace/data/preprocessed_data/integrated_uniform_split", "ATAC")
-#gene_weight = get_gene_weight_alt(train_atac)
+train_atac, val_atac, test_atac = separate_loader(DATA_PATH, "ATAC")
 atac_pos_weights = get_atac_pos_weights(train_atac.X)
 
 train_dataset = SingleDatasetVAE(train_atac)

@@ -13,45 +13,6 @@ from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts
 from utils.logging_utils import (start_log, log, log_section)
 
 
-# def get_hidden_dim_steps(input, output, steps):
-#     return list(np.linspace(output, input, num=steps))
-
-
-# def init_encoder(layers, input_dim, latent_dim, dropout_prob=None):
-#     encoder_layers = []
-
-#     layer_dims = get_hidden_dim_steps(input_dim, latent_dim, layers+1)
-
-#     for i in range(1, layers+1):
-
-#         encoder_layers.append(nn.Linear(int(layer_dims[-i]), int(layer_dims[-i-1])))
-#         encoder_layers.append(nn.ReLU(inplace=True))
-#         if dropout_prob:
-#             encoder_layers.append(nn.Dropout(dropout_prob))
-    
-#     encoder = nn.Sequential(*encoder_layers)
-
-#     return encoder 
-
-
-# def init_decoder(layers, input_dim, latent_dim, dropout_prob=None):
-#     decoder_layers = []
-
-#     layer_dims = get_hidden_dim_steps(input_dim, latent_dim, layers+1)
-
-#     for i in range(layers-1):
-
-#         decoder_layers.append(nn.Linear(int(layer_dims[i]), int(layer_dims[i+1])))
-#         decoder_layers.append(nn.ReLU(inplace=True))
-#         if dropout_prob:
-#             decoder_layers.append(nn.Dropout(dropout_prob))
-    
-#     decoder_layers.append(nn.Linear(int(layer_dims[-2]), int(layer_dims[-1])))
-
-#     decoder = nn.Sequential(*decoder_layers)
-
-#     return decoder 
-
 
 def init_encoder(input_dim, latent_dim, hidden_dims=[1024, 512, 256]):
     layers = []
@@ -80,21 +41,20 @@ def init_decoder(latent_dim, input_dim, hidden_dims=[256, 512, 1024]):
     
     
     trunk   = nn.Sequential(*layers)
-    mu_head = nn.Linear(curr_dim, input_dim)   # curr_dim=1024 → 10000
+    mu_head = nn.Linear(curr_dim, input_dim)   
     
     return trunk, mu_head
 
 
 class InfoVAE_RNA(nn.Module):
+    """infoVAE class for compression and reconstruction of processed RNA expression profiles."""
     def __init__(
             self, 
             input_size: int, 
             latent_size: int, 
             lr: float,
             wd: float,
-            mode: str,  # either "rna" or "atac"
             device,
-            #gene_weight,
             lambda_mmd: float = 0.1,
             ):
         
@@ -103,7 +63,6 @@ class InfoVAE_RNA(nn.Module):
         self.input_size = int(input_size)
         self.latent_size = int(latent_size)
         #self.lambda_mmd = lambda_mmd
-        self.mode = mode
 
         self.lambda_kl = 0.01
         self.lambda_recon = 40.0
@@ -131,13 +90,6 @@ class InfoVAE_RNA(nn.Module):
             lr=lr,
             weight_decay=wd,
             )
-
-        # self.scheduler = ReduceLROnPlateau(
-        #     self.optimizer,
-        #     mode="min",
-        #     factor=0.5,
-        #     patience=10,
-        # )
 
         self.scheduler = CosineAnnealingWarmRestarts(
             self.optimizer, T_0=50, T_mult=1, eta_min=lr * 1e-2,
@@ -193,40 +145,6 @@ class InfoVAE_RNA(nn.Module):
 
         return z_kernel.mean() + prior_kernel.mean() - 2 * cross_kernel.mean()
 
-    # def compute_mmd(self, z: torch.Tensor):
-    #     z = z.to(torch.float32)
-    #     prior_z = torch.randn_like(z)
-
-    #     def rbf_kernel(x1, x2, sigma=None):
-    #         dist = torch.cdist(x1, x2, p=2.0).pow(2)
-    #         if sigma is None:
-    #             # Median heuristic — adapts to actual latent geometry
-    #             sigma = dist.median().clamp(min=1e-2)
-    #         return torch.exp(-dist / sigma)
-
-    #     z_kernel     = rbf_kernel(z, z)
-    #     prior_kernel = rbf_kernel(prior_z, prior_z)
-    #     cross_kernel = rbf_kernel(z, prior_z)
-    #     return z_kernel.mean() + prior_kernel.mean() - 2 * cross_kernel.mean()
-
-
-    def _nb_loss(self, x: torch.Tensor, recon: torch.Tensor) -> torch.Tensor:
-        theta = self.log_theta.exp().clamp(1e-4, 1e4)   # [genes]
-        eps   = 1e-8
- 
-        # NB log-likelihood (per element), summed over genes, mean over cells
-        log_theta_mu = torch.log(theta + recon + eps)
-        nb_ll = (
-            theta * (torch.log(theta + eps) - log_theta_mu)
-            + x   * (torch.log(recon  + eps) - log_theta_mu)
-            + torch.lgamma(x + theta)
-            - torch.lgamma(theta)
-            - torch.lgamma(x + 1)
-        )                                               
- 
-        weighted = -(nb_ll * self.gene_weight).mean()
-        return weighted
-
     def loss_function(
             self,
             x:      torch.Tensor,
@@ -237,7 +155,7 @@ class InfoVAE_RNA(nn.Module):
             beta:   float = 1.0,   
             ) -> torch.Tensor:
 
-        recon_loss = F.mse_loss(recon, x, reduction='mean') #self._nb_loss(x, recon)
+        recon_loss = F.mse_loss(recon, x, reduction='mean') 
 
         kl_loss    = -0.5 * torch.mean(
             1 + logvar - mu.pow(2) - logvar.exp(), #dim=-1
@@ -246,16 +164,7 @@ class InfoVAE_RNA(nn.Module):
         mmd_loss   = self.compute_mmd(z)
 
         return self.lambda_recon * recon_loss + (beta * self.lambda_kl * kl_loss) + (self.lambda_mmd * mmd_loss)
-    
 
-    # def loss_function(self, x, x_recon, z, mu, logvar, beta=1.0):
-    #     recon_loss = F.mse_loss(x_recon, x, reduction='mean')
-        
-    #     # KL is currently zero — this is the main bug
-    #     kl_loss = -0.5 * torch.mean(1 + logvar - mu.pow(2) - logvar.exp())
-    #     mmd_loss = self.compute_mmd(z)
-        
-    #     return recon_loss + (beta * kl_loss) + (self.lambda_mmd * mmd_loss)
 
 
     def train_one_epoch(self, train_loader, beta: float = 1.0):
@@ -324,6 +233,7 @@ def train_infoVAE_RNA(
         restart_log: bool = True,
         warmup_epochs: int = 20,
         ):
+    """Function to train infoVAE_RNA model class."""
     
     if restart_log:
         start_log(log_path, "infoVAE_training_run")
@@ -335,8 +245,6 @@ def train_infoVAE_RNA(
         lr=model_params["lr"],
         wd=model_params["wd"],
         device=model_params["device"],
-        mode=model_params["mode"],
-        #gene_weight=model_params["gene_weight"],
         lambda_mmd=model_params["lambda_mmd"]
     )
     model = torch.compile(model)

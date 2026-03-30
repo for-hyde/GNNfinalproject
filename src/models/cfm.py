@@ -37,6 +37,7 @@ class TimeEmbedding(nn.Module):
 
 
 class ResidualBlock(nn.Module):
+    """Flexible residual block used as a building block in the ExpressiveCFM class."""
     def __init__(self, dim, time_emb_dim):
         super().__init__()
         self.linear = nn.Linear(dim, dim)
@@ -53,6 +54,7 @@ class ResidualBlock(nn.Module):
 
 
 class ExpressiveCFM(nn.Module):
+    """A more expressive and complex CFM model to replace the MLP class of TorchCFM"""
     def __init__(self, dim, w=512, time_emb_dim=64, num_layers=4):
         super().__init__()
         self.time_mlp = nn.Sequential(
@@ -85,6 +87,7 @@ class ExpressiveCFM(nn.Module):
 
 
 class ModalityConverter(nn.Module):
+    """CFM model to convert RNA expression profiles to ATAC peak profiles"""
     def __init__(self, latent_dim, rna_vae, atac_vae, device, sigma=0.01, proj_dim=128):
         super().__init__()
         self.sigma = sigma
@@ -118,23 +121,6 @@ class ModalityConverter(nn.Module):
         self.device = device
         self.to(self.device)
     
-
-    def alignment_loss(self, z_rna, z_atac, temperature=0.1):
-        # Project and L2-normalize
-        p_rna  = F.normalize(self.proj_rna(z_rna),  dim=-1)  # (B, proj_dim)
-        p_atac = F.normalize(self.proj_atac(z_atac), dim=-1)  # (B, proj_dim)
-
-        # Similarity matrix
-        logits = (p_rna @ p_atac.T) / temperature  # (B, B)
-
-        # Diagonal = matched pairs = positive examples
-        labels = torch.arange(len(logits), device=logits.device)
-        
-        # Symmetric cross-entropy (same as CLIP)
-        loss = (F.cross_entropy(logits, labels) + 
-                F.cross_entropy(logits.T, labels)) / 2
-        return loss
-    
     
     def compute_latent_norm(self, train_loader):
         z_rna_all, z_atac_all = [], []
@@ -158,16 +144,10 @@ class ModalityConverter(nn.Module):
         module.eval()
         for param in module.parameters():
             param.requires_grad = False
-
-    # def _encode_rna(self, x):
-    #     return self.fc_mu_rna(self.encoder_rna(x)) 
     
     def _encode_rna(self, x):
         z = self.fc_mu_rna(self.encoder_rna(x))
         return (z - self.rna_mean) / self.rna_std
-
-    # def _encode_atac(self, x):
-    #     return self.fc_mu_atac(self.encoder_atac(x)) 
 
     def _encode_atac(self, x):
         z = self.fc_mu_atac(self.encoder_atac(x))
@@ -181,14 +161,6 @@ class ModalityConverter(nn.Module):
         t, zt, ut = self.fm.sample_location_and_conditional_flow(z_rna, z_atac)
         vt = self.cfm_model(torch.cat([zt, t[:, None]], dim=-1))
         return vt, ut
-
-
-    # def convert(self, x_rna):
-    #     z_rna = self._encode_rna(x_rna)
-    #     t_span = torch.linspace(0, 1, 100, device=x_rna.device)
-    #     z_atac_hat = odeint(self.vector_field, z_rna, t_span)[-1]
-    #     h = self.decoder_atac(z_atac_hat)
-    #     return self.decoder_mu_head_atac(h)
 
     def convert(self, x_rna, n_steps=100):
         self.cfm_model.eval()
@@ -213,12 +185,7 @@ class ModalityConverter(nn.Module):
             return self.decoder_mu_head_atac(h)
 
 
-    # def training_step(self, x_source: torch.Tensor, x_target: torch.Tensor) -> torch.Tensor:
-    #     vt, ut = self.forward(x_source, x_target)
-    #     return torch.mean((vt - ut) ** 2)
-
-    # NT-Xent / InfoNCE alginment loss included! 
-    def training_step(self, x_rna: torch.Tensor, x_atac: torch.Tensor, alpha=0) -> torch.Tensor:
+    def training_step(self, x_rna: torch.Tensor, x_atac: torch.TensorType) -> torch.Tensor:
         with torch.no_grad():
             z_rna  = self._encode_rna(x_rna)
             z_atac = self._encode_atac(x_atac)
@@ -227,10 +194,7 @@ class ModalityConverter(nn.Module):
         vt = self.cfm_model(torch.cat([zt, t[:, None]], dim=-1))
         loss_cfm = torch.mean((vt - ut) ** 2)
 
-        #loss_align = self.alignment_loss(z_rna, z_atac)
-
-        return loss_cfm #+ alpha * loss_align
-
+        return loss_cfm 
     
     def vector_field(self, t, z):
         t_batch = torch.full((z.shape[0], 1), t.item(), device=z.device)
@@ -286,12 +250,13 @@ class ModalityConverter(nn.Module):
         z_rna = self._encode_rna(x_rna)
 
         t_span = torch.linspace(0, 1, n_steps, device=self.device)
+
         #trajectory = odeint(self.vector_field, z_rna, t_span)
         trajectory = odeint(
             self.vector_field, 
             z_rna, 
             t_span,
-            method="dopri5",          # adaptive — much more accurate for large gaps
+            method="dopri5",  
             rtol=1e-4, 
             atol=1e-5,
         )
@@ -318,6 +283,7 @@ def train_modality_converter(
     log_path: str = "/workspace/runs",
     restart_log: bool = True,
     ):
+    """Training function for modality converting model."""
     
     if restart_log:
         start_log(log_path, "otcfm_training_run")
@@ -355,13 +321,6 @@ def train_modality_converter(
     log(str(modality_converter.parameters))
 
     ot_cfm_optimizer = torch.optim.AdamW(modality_converter.parameters(), lr=1e-3, weight_decay=1e-5)
-
-    # scheduler = torch.optim.lr_scheduler.OneCycleLR(
-    #     ot_cfm_optimizer, 
-    #     max_lr=1e-3, 
-    #     steps_per_epoch=len(train_loader), 
-    #     epochs=epochs
-    # )
 
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
         ot_cfm_optimizer, T_max=epochs, eta_min=1e-5

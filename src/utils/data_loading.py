@@ -6,6 +6,7 @@ import numpy as np
 import random
 from torch.utils.data import DataLoader
 import os 
+from collections import OrderedDict
 
 
 ####################################################################################################
@@ -312,27 +313,62 @@ class MultiomeDatasetCMF(Dataset):
         return self.X_multiome[idx]
 
 
+def threshold_to_match_sparsity_cfm(probs: np.ndarray, original: np.ndarray,
+                                tolerance: float = 0.005) -> tuple[np.ndarray, float]:
+    """Binary-search threshold so predicted density ≈ original density."""
+    target = original.mean()
+    lo, hi = 0.0, 1.0
+    mid = 0.5
+    for _ in range(50):
+        mid = (lo + hi) / 2
+        if abs((probs > mid).mean() - target) < tolerance:
+            break
+        if (probs > mid).mean() > target:
+            lo = mid
+        else:
+            hi = mid
+    print(f"  threshold={mid:.4f}  pred_density={(probs>mid).mean():.4f}  "
+          f"target_density={target:.4f}")
+    return (probs > mid).astype(np.float32), mid
 
-def main():
-    
-    rna, atac = load_data('bmmc_atac_highly_variable.h5ad', 'bmmc_rna_highly_variable.h5ad', multiome=False)
 
-    train_idx, val_idx = split_dataset(rna)
+def mmd_rbf(X: np.ndarray, Y: np.ndarray, gamma: float = 1.0) -> float:
+    """Unbiased MMD² estimate with RBF kernel. Small = distributions are close."""
+    from sklearn.metrics.pairwise import rbf_kernel
+    XX = rbf_kernel(X, X, gamma)
+    YY = rbf_kernel(Y, Y, gamma)
+    XY = rbf_kernel(X, Y, gamma)
+    n, m = len(X), len(Y)
+    np.fill_diagonal(XX, 0); np.fill_diagonal(YY, 0)
+    return XX.sum() / (n*(n-1)) + YY.sum() / (m*(m-1)) - 2*XY.mean()
 
-    train_dataset = MultiomeDataset(rna, atac, train_idx)
-    val_dataset   = MultiomeDataset(rna, atac, val_idx)
-    train_dataloader = DataLoader(train_dataset, batch_size=64, shuffle=True)
-    val_dataloader = DataLoader(val_dataset, batch_size=64, shuffle=True)
-    
-    # multiome = load_data('bmmc_atac_highly_variable.h5ad', 'bmmc_rna_highly_variable.h5ad', multiome=True)
-    # train_idx, val_idx = split_dataset(multiome)
 
-    # train_dataset = MultiomeDatasetCMF(multiome, train_idx)
-    # val_dataset   = MultiomeDatasetCMF(multiome, val_idx)
+def per_dim_kl_gaussian(mu1, sigma1, mu2, sigma2):
+    """KL(N(mu1,σ1²) ‖ N(mu2,σ2²)) per dimension (scalar arrays of length D)."""
+    return (np.log(sigma2/sigma1)
+            + (sigma1**2 + (mu1-mu2)**2) / (2*sigma2**2)
+            - 0.5)
 
-    # train_dataloader = DataLoader(train_dataset, batch_size=64, shuffle=True)
-    # val_dataloader = DataLoader(val_dataset, batch_size=64, shuffle=True)
 
-if __name__ == '__main__':
-    main()
-    
+def encode_batched(model_encode_fn, tensor: torch.Tensor,
+                   batch_size: int = 512, device=None) -> np.ndarray:
+    """Run encoder over a large tensor in mini-batches, return mu as numpy."""
+    mus = []
+    for i in range(0, len(tensor), batch_size):
+        b = tensor[i:i+batch_size].to(device)
+        with torch.no_grad():
+            _, mu, _ = model_encode_fn(b)
+        mus.append(mu.cpu().numpy())
+    return np.concatenate(mus)
+
+
+def load_state(model, path, device):
+    state_dict = torch.load(path, map_location=device, weights_only=False)
+    new_state_dict = OrderedDict()
+    for k, v in state_dict.items():
+        name = k.replace("_orig_mod.", "")
+        new_state_dict[name] = v
+    model.load_state_dict(new_state_dict)
+    print("Model weights loaded successfully!")
+    model.eval()
+    return model

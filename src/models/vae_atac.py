@@ -13,67 +13,23 @@ from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts
 from utils.logging_utils import (start_log, log, log_section)
 
 
-# def get_hidden_dim_steps(input, output, steps):
-#     return list(np.linspace(output, input, num=steps))
-
-
-# def init_encoder(layers, input_dim, latent_dim, dropout_prob=None):
-#     encoder_layers = []
-
-#     layer_dims = get_hidden_dim_steps(input_dim, latent_dim, layers+1)
-
-#     for i in range(1, layers+1):
-
-#         encoder_layers.append(nn.Linear(int(layer_dims[-i]), int(layer_dims[-i-1])))
-#         encoder_layers.append(nn.ReLU(inplace=True))
-#         if dropout_prob:
-#             encoder_layers.append(nn.Dropout(dropout_prob))
-    
-#     encoder = nn.Sequential(*encoder_layers)
-
-#     return encoder 
-
-
-# def init_decoder(layers, input_dim, latent_dim, dropout_prob=None):
-#     decoder_layers = []
-
-#     layer_dims = get_hidden_dim_steps(input_dim, latent_dim, layers+1)
-
-#     for i in range(layers-1):
-
-#         decoder_layers.append(nn.Linear(int(layer_dims[i]), int(layer_dims[i+1])))
-#         decoder_layers.append(nn.ReLU(inplace=True))
-#         if dropout_prob:
-#             decoder_layers.append(nn.Dropout(dropout_prob))
-    
-#     decoder_layers.append(nn.Linear(int(layer_dims[-2]), int(layer_dims[-1])))
-
-#     decoder = nn.Sequential(*decoder_layers)
-
-#     return decoder 
-
 def calculate_bce_pos_weight(train_loader):
     """
-    Calculates the global ratio of 0s to 1s in the dataset to be used 
-    as the pos_weight in BCEWithLogitsLoss.
+    Calculates the global ratio of 0s to 1s in the dataset to be used as the pos_weight in BCEWithLogitsLoss.
     """
     total_ones = 0
     total_zeros = 0
     
     log("Scanning training data to calculate sparsity...")
     
-    # We don't need gradients for this
     with torch.no_grad():
         for batch in train_loader:
-            # If your loader returns a tuple (data, labels), adjust to batch[0]
-            # Assuming 'batch' is just the input tensor x here
             ones = batch.sum().item()
             elements = batch.numel()
             
             total_ones += ones
             total_zeros += (elements - ones)
             
-    # Calculate the ratio
     pos_weight = total_zeros / total_ones
     sparsity_pct = (total_zeros / (total_zeros + total_ones)) * 100
     
@@ -109,19 +65,20 @@ def init_decoder(latent_dim, input_dim, hidden_dims=[256, 512, 1024]):
     
     
     trunk   = nn.Sequential(*layers)
-    mu_head = nn.Linear(curr_dim, input_dim)   # curr_dim=1024 → 10000
+    mu_head = nn.Linear(curr_dim, input_dim)  
     
     return trunk, mu_head
 
 
 class InfoVAE_ATAC(nn.Module):
+    """infoVAE class for compression and reconstruction of processed ATAC peak profiles."""
+
     def __init__(
             self, 
             input_size: int, 
             latent_size: int, 
             lr: float,
             wd: float,
-            mode: str,  # either "rna" or "atac"
             device,
             pos_weight = None,
             lambda_mmd: float = 0.1,
@@ -131,8 +88,7 @@ class InfoVAE_ATAC(nn.Module):
         
         self.input_size = int(input_size)
         self.latent_size = int(latent_size)
-        #self.lambda_mmd = lambda_mmd
-        self.mode = mode
+
         self.lambda_kl = 0.01
         self.lambda_recon = 40.0
 
@@ -248,11 +204,10 @@ class InfoVAE_ATAC(nn.Module):
             logits, x, pos_weight=self.pos_weight, reduction='none'
         )
         
-        # Probability of the *correct* class
         probs = torch.sigmoid(logits)
         p_t = probs * x + (1 - probs) * (1 - x)
         
-        # Down-weight easy examples
+ 
         focal_weight = (1 - p_t) ** gamma
         
         return (focal_weight * bce).mean()
@@ -270,15 +225,6 @@ class InfoVAE_ATAC(nn.Module):
         #log(f"BCE={bce_loss}  KL={kl_loss}  MMD={mmd_loss}")
         return (self.lambda_recon * bce_loss) + (beta * self.lambda_kl * kl_loss) + (self.lambda_mmd * mmd_loss)
     
-
-    # def loss_function(self, x, x_recon, z, mu, logvar, beta=1.0):
-    #     recon_loss = F.mse_loss(x_recon, x, reduction='mean')
-        
-    #     # KL is currently zero — this is the main bug
-    #     kl_loss = -0.5 * torch.mean(1 + logvar - mu.pow(2) - logvar.exp())
-    #     mmd_loss = self.compute_mmd(z)
-        
-    #     return recon_loss + (beta * kl_loss) + (self.lambda_mmd * mmd_loss)
 
 
     def train_one_epoch(self, train_loader, beta: float = 1.0):
@@ -305,11 +251,6 @@ class InfoVAE_ATAC(nn.Module):
             accuracy = (predicted_binary == batch_data).float().mean()
             true_positive_rate = (predicted_binary[batch_data == 1]).mean()   # recall on open peaks
             log(f"Accuracy={accuracy:.4f}  Open-peak recall={true_positive_rate:.4f}")
-        
-        # recon_l = F.binary_cross_entropy_with_logits(x_recon, batch_data)
-        # kl_l    = -0.5 * torch.mean(1 + logvar - mu.pow(2) - logvar.exp())
-        # mmd_l   = self.compute_mmd(z)
-        # #log(f"recon={recon_l:.4f}  kl={kl_l:.4f}  mmd={mmd_l:.4f}")
 
         total_loss /= len(train_loader)
         
@@ -359,7 +300,6 @@ def train_infoVAE_ATAC(
         start_log(log_path, "infoVAE_training_run")
     log_section("LOADING MODEL")
 
-    #recommended_weight = calculate_bce_pos_weight(train_loader)
 
     model = InfoVAE_ATAC(
         input_size=model_params["input_size"],
@@ -367,7 +307,6 @@ def train_infoVAE_ATAC(
         lr=model_params["lr"],
         wd=model_params["wd"],
         device=model_params["device"],
-        mode=model_params["mode"],
         lambda_mmd=model_params["lambda_mmd"],
         pos_weight=model_params["pos_weight"].squeeze(0),
     )
@@ -386,17 +325,14 @@ def train_infoVAE_ATAC(
         
         beta = _kl_beta(epoch, warmup_epochs)
 
-        # 1. Train first
         training_loss = model.train_one_epoch(train_loader, beta)
         training_loss_avg = training_loss #/ len(train_loader) already divided by N in loss function!
         training_losses.append(training_loss_avg)
 
-        # 2. Then validate
         validation_loss = model.validate(valid_loader, beta)
         validation_loss_avg = validation_loss #/ len(valid_loader)
         validation_losses.append(validation_loss_avg)
         
-        # 3. Step scheduler based on the actual trained epoch
         model.scheduler.step()
         
         if epoch >= TRACK_FROM_EPOCH:
